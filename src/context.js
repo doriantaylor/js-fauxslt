@@ -13,11 +13,14 @@ export class Context {
   }
 
   // evaluate an arbitrary expression: returns a node array, number,
-  // string, or boolean depending on the expression
+  // string, or boolean depending on the expression. the expression
+  // is precompiled per (registry, document) through the registry's
+  // XPathExpression cache — select() is typically called in loops,
+  // and createExpression front-loads the parse.
   select (expression) {
-    const resolver = this.registry.nsResolver();
-    const r = this.doc.evaluate(expression, this.node, resolver,
-      XPathResult.ANY_TYPE, null);
+    const expr = this.registry._compiledExpression(
+      { evalExpr: expression }, this.doc);
+    const r = expr.evaluate(this.node, XPathResult.ANY_TYPE, null);
     switch (r.resultType) {
       case XPathResult.NUMBER_TYPE:  return r.numberValue;
       case XPathResult.STRING_TYPE:  return r.stringValue;

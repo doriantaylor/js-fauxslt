@@ -25,6 +25,30 @@ export class Registry {
     // per-transform match cache, invalidated at every transform():
     // Map<match-expression-string, Set<matched node>>
     this._matchCache = new Map();
+
+    // compiled XPathExpression cache, keyed weakly by document (a
+    // registry can serve multiple documents; the expressions
+    // themselves are reusable across transforms, so they outlive the
+    // per-transform match cache and are only held while the document
+    // lives)
+    this._expressions = new WeakMap();
+  }
+
+  // get (or create) a compiled XPathExpression for a pattern in a
+  // document, via document.createExpression. this front-loads the
+  // expression parse to once per (pattern, document) instead of once
+  // per evaluate() call in the match walk, and surfaces expression
+  // errors at first use — consistent with fail-at-registration.
+  _compiledExpression (compiled, doc) {
+    let byExpr = this._expressions.get(doc);
+    if (!byExpr) {
+      byExpr = new Map();
+      this._expressions.set(doc, byExpr);
+    }
+    const key = compiled.evalExpr || compiled.expr;
+    if (!byExpr.has(key))
+      byExpr.set(key, doc.createExpression(key, this.nsResolver()));
+    return byExpr.get(key);
   }
 
   // register a template against a match pattern. the pattern is
@@ -83,12 +107,13 @@ export class Registry {
     return set;
   }
 
-  // evaluate a pattern as a node-set snapshot from a context node
+  // evaluate a pattern as a node-set snapshot from a context node,
+  // using the registry's precompiled XPathExpression
   _evaluatePattern (compiled, node) {
     const doc = node.ownerDocument || node;
-    const resolver = this.nsResolver();
-    const r = doc.evaluate(compiled.evalExpr || compiled.expr, node,
-      resolver, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    const expr = this._compiledExpression(compiled, doc);
+    const r = expr.evaluate(node,
+      XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
     const out = [];
     for (let i = 0; i < r.snapshotLength; i++)
       out.push(r.snapshotItem(i));

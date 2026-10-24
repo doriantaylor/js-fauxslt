@@ -1,4 +1,4 @@
-import MARKUP from 'asset/module/markup-mixup';
+import MARKUP from 'markup-mixup';
 
 // FauXSLT module
 

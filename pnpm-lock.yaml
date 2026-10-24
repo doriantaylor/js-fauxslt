@@ -1,0 +1,23 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      markup-mixup:
+        specifier: file:../js-markup-mixup
+        version: file:../js-markup-mixup
+
+packages:
+
+  markup-mixup@file:../js-markup-mixup:
+    resolution: {directory: ../js-markup-mixup, type: directory}
+    engines: {node: '>=18'}
+
+snapshots:
+
+  markup-mixup@file:../js-markup-mixup: {}

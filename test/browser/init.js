@@ -1,7 +1,8 @@
-// browser-side module: loads the library and exposes it on window so
-// playwright tests (which run in node) can drive it via evaluate()
+// browser-side module: loads the built single-file bundle (the
+// shipped artifact) and exposes it on window so playwright tests
+// (which run in node) can drive it via evaluate()
 
-import * as fauxslt from '../../fauxslt.mjs';
+import * as fauxslt from '../../dist/fauxslt.js';
 
 window.fauxslt = fauxslt;
 window.__ready = true;

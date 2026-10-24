@@ -1,0 +1,6 @@
+allowBuilds:
+  esbuild: true
+# pnpm v12 reads build-script trust from this file even for
+# standalone projects (per its own guidance). this is a trust
+# declaration, not a workspace: esbuild's postinstall is allowed;
+# nothing else is.

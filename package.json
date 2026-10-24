@@ -17,18 +17,25 @@
   "license": "Apache-2.0",
   "author": "Dorian Taylor",
   "type": "module",
-  "main": "fauxslt.mjs",
+  "main": "dist/fauxslt.js",
   "exports": {
-    ".": "./fauxslt.mjs"
+    ".": "./dist/fauxslt.js"
   },
+  "files": [
+    "dist/fauxslt.js",
+    "src/"
+  ],
   "scripts": {
-    "test": "playwright test"
+    "build": "esbuild src/index.js --bundle --format=esm --external:markup-mixup --outfile=dist/fauxslt.js",
+    "test:unit": "node --test test/pattern.test.js",
+    "test": "pnpm build && playwright test && node --test test/pattern.test.js"
   },
   "dependencies": {
     "markup-mixup": "file:../js-markup-mixup"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
+    "esbuild": "^0.28.2",
     "peggy": "^5.1.1",
     "playwright": "^1.64.1",
     "serve": "^14.2.6"

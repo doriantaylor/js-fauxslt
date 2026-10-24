@@ -15,6 +15,9 @@ importers:
       '@playwright/test':
         specifier: ^1.64.1
         version: 1.64.1
+      peggy:
+        specifier: ^5.1.1
+        version: 5.1.1
       playwright:
         specifier: ^1.64.1
         version: 1.64.1
@@ -23,6 +26,10 @@ importers:
         version: 14.2.6(supports-color@7.2.0)
 
 packages:
+
+  '@peggyjs/from-mem@4.0.0':
+    resolution: {integrity: sha512-JrTyhN5Vo2K3Ktz+bTTpt7ueL6PRG/11xhW7BdSK2TaJIbxSJpRk10TLn+4eBPQUCtrkQeYAg0MlVrc9QZMFEg==}
+    engines: {node: '>=22'}
 
   '@playwright/test@1.64.1':
     resolution: {integrity: sha512-IaYGml/nSOiZWROfPtuIL7neuu9qDOZ3TNvNljUIrhDMxiGTgPjzj/g9p9RxpS2tSepPDRY+UwAaEeiKtUvIAg==}
@@ -108,6 +115,10 @@ packages:
 
   color-name@1.1.4:
     resolution: {integrity: sha512-dOy+3AuW3a2wNbZHIuMZpTcgjGuLU/uBL/ubcZF9OXbDo8ff4O8yVp5Bf0efS8uEoYo5q4Fx7dY9OgQGXgAsQA==}
+
+  commander@14.0.3:
+    resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
+    engines: {node: '>=20'}
 
   compressible@2.0.18:
     resolution: {integrity: sha512-AF3r7P5dWxL8MxyITRMlORQNaOA2IkAFaTr4k7BUumjPtRpGDTZpl0Pb1XCO6JeDCBdp126Cgs9sMxqSjgYyRg==}
@@ -259,6 +270,11 @@ packages:
   path-to-regexp@3.3.0:
     resolution: {integrity: sha512-qyCH421YQPS2WFDxDjftfc1ZR5WKQzVzqsp4n9M2kQhVOo/ByahFoUNJfl58kOcEGfQ//7weFTDhm+ss8Ecxgw==}
 
+  peggy@5.1.1:
+    resolution: {integrity: sha512-HhhbwH1MoCq9YNqeC2n1ap6YzLSL1YUgUxGoeiXcmGOlAYTqxwmifPJ7gFZtkR/S2+KXZ6BkJ5FfycTtq9oCRQ==}
+    engines: {node: '>=22'}
+    hasBin: true
+
   playwright-core@1.64.1:
     resolution: {integrity: sha512-BC4s8y6SEVA6Q1rSxZTto8hI1KUI3xXlHGZgvGqP4IqPdI/a6FX9H29IDNz7vKo9l21b6LfYosScPL6M3xxyDQ==}
     engines: {node: '>=20'}
@@ -291,6 +307,11 @@ packages:
   safe-buffer@5.2.1:
     resolution: {integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==}
 
+  semver@7.8.5:
+    resolution: {integrity: sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==}
+    engines: {node: '>=10'}
+    hasBin: true
+
   serve-handler@6.1.7:
     resolution: {integrity: sha512-CinAq1xWb0vR3twAv9evEU8cNWkXCb9kd5ePAHUKJBkOsUpR1wt/CvGdeca7vqumL1U5cSaeVQ6zZMxiJ3yWsg==}
 
@@ -309,6 +330,10 @@ packages:
 
   signal-exit@3.0.7:
     resolution: {integrity: sha512-wnD2ZE+l+SPC/uoS0vXeE9L1+0wuaMqKlfz9AMUo38JsyLSBWSFcHR1Rri62LZc12vLr1gb3jl7iwQhgwpAbGQ==}
+
+  source-map-generator@2.0.7:
+    resolution: {integrity: sha512-DJBSmVt7U50+Z+MihfPJKhrbAAC0VHriNQlufDfgaikQfAmPck05rjJ9BO2LXTabA6644umhFm2+XZ8aRZxTkQ==}
+    engines: {node: '>=20'}
 
   string-width@4.2.3:
     resolution: {integrity: sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==}
@@ -363,6 +388,10 @@ packages:
     engines: {node: '>=12'}
 
 snapshots:
+
+  '@peggyjs/from-mem@4.0.0':
+    dependencies:
+      semver: 7.8.5
 
   '@playwright/test@1.64.1':
     dependencies:
@@ -443,6 +472,8 @@ snapshots:
       color-name: 1.1.4
 
   color-name@1.1.4: {}
+
+  commander@14.0.3: {}
 
   compressible@2.0.18:
     dependencies:
@@ -564,6 +595,12 @@ snapshots:
 
   path-to-regexp@3.3.0: {}
 
+  peggy@5.1.1:
+    dependencies:
+      '@peggyjs/from-mem': 4.0.0
+      commander: 14.0.3
+      source-map-generator: 2.0.7
+
   playwright-core@1.64.1: {}
 
   playwright@1.64.1:
@@ -591,6 +628,8 @@ snapshots:
   require-from-string@2.0.2: {}
 
   safe-buffer@5.2.1: {}
+
+  semver@7.8.5: {}
 
   serve-handler@6.1.7:
     dependencies:
@@ -625,6 +664,8 @@ snapshots:
   shebang-regex@3.0.0: {}
 
   signal-exit@3.0.7: {}
+
+  source-map-generator@2.0.7: {}
 
   string-width@4.2.3:
     dependencies:

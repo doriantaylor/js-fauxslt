@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
+    "peggy": "^5.1.1",
     "playwright": "^1.64.1",
     "serve": "^14.2.6"
   }

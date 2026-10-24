@@ -13,10 +13,10 @@ export default defineConfig({
 
   // fauxslt is not a cross-browser matrix project (yet); one modern
   // engine faithfully reflects the deployment target
-  projects: [{
-    name: 'chromium',
-    use: { browserName: 'chromium', baseURL: 'http://localhost:3721' },
-  }],
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium',
+      baseURL: 'http://localhost:3721' } },
+  ],
 
   webServer: {
     command: 'pnpm exec serve -l 3721 .',

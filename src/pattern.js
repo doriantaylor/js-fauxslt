@@ -11,6 +11,15 @@
 
 import { parse } from './xpath-pattern.js';
 
+// synthetic prefix bound to the XHTML namespace at evaluation time.
+// unprefixed element name tests are rewritten to this prefix so that
+// one expression matches both HTML documents (whose elements the DOM
+// reports as namespace-less but which match XHTML-mapped prefixed
+// names in document.evaluate) and XHTML documents (where unprefixed
+// XPath names match no namespace at all). the empty prefix has no
+// default namespace in XPath 1.0, so this is the only uniform route.
+export const XHTML_PREFIX = 'faux';
+
 export class UnsupportedPatternError extends Error {
   constructor (message) {
     super(message);
@@ -25,8 +34,9 @@ export class NotImplementedError extends Error {
   }
 }
 
-// compile a pattern: validate syntax, reject key(), return metadata
-export function compilePattern (expr) {
+// compile a pattern: validate syntax, reject key(), rewrite unprefixed
+// element name tests to the XHTML prefix, return metadata
+export function compilePattern (expr, opts = {}) {
   let ast = null;
   try {
     ast = parse(expr, { grammarSource: expr });
@@ -41,13 +51,51 @@ export function compilePattern (expr) {
     throw new NotImplementedError(
       'key() is not implemented: ' + expr);
 
+  const prefix = opts.xhtmlPrefix !== undefined ?
+    opts.xhtmlPrefix : XHTML_PREFIX;
+
+  // rewrite unprefixed element name tests to the xhtml prefix so the
+  // expression matches uniformly in HTML and XHTML. attribute names
+  // are left alone: in the HTML DOM attributes are namespace-less,
+  // and unprefixed attribute tests match exactly that.
+  rewriteNameTests(ast, prefix);
+
   return {
     expr,
     ast,
-    // an absolute pattern (/ or // rooted) matches by evaluating from
-    // the document root; a relative pattern is tested per-node
     absolute: isAbsolute(ast),
+    // the expression actually handed to document.evaluate
+    evalExpr: reserialize(ast, expr),
   };
+}
+
+// walk the AST and prefix unprefixed element name tests
+function rewriteNameTests (node, prefix) {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'step' && node.test && node.test.kind === 'name') {
+    const name = node.test.name;
+    // element steps only; attribute steps carry axis 'attribute'
+    if (node.axis !== 'attribute' &&
+      name.indexOf(':') === -1 && name !== '*')
+      node.test.name = prefix + ':' + name;
+  }
+  for (const k of Object.keys(node)) {
+    const v = node[k];
+    if (Array.isArray(v)) for (const n of v) rewriteNameTests(n, prefix);
+    else if (v && typeof v === 'object') rewriteNameTests(v, prefix);
+  }
+}
+
+// produce the evaluation expression from the (rewritten) AST
+function reserialize (ast, original) {
+  try {
+    return serializePattern(ast);
+  }
+  catch (e) {
+    // if serialization ever fails, fall back to the original —
+    // validation already passed
+    return original;
+  }
 }
 
 function findKeyNode (node) {
@@ -70,6 +118,94 @@ function isAbsolute (ast) {
   if (ast && ast.type === 'path') return ast.from === 'root';
   // id()/key() patterns are inherently absolute per §5.2
   return true;
+}
+
+// serialize a pattern AST back to an XPath expression string. the
+// node shapes come from the grammar; this is the inverse of parse()
+// for the subset fauxslt supports, used to emit the rewritten
+// (xhtml-prefixed) evaluation expression.
+export function serializePattern (ast) {
+  return serPattern(ast);
+}
+
+function serPattern (n) {
+  if (n.type === 'union')
+    return n.branches.map(serLocationPath).join(' | ');
+  return serLocationPath(n);
+}
+
+function serLocationPath (n) {
+  if (n.type === 'id') return "id('" + n.id + "')" +
+    (n.steps ? '/' + serSteps(n.steps) : '');
+  if (n.type === 'key') return "key('" + n.name + "','" + n.value + "')" +
+    (n.steps ? '/' + serSteps(n.steps) : '');
+  // path
+  if (n.from === 'root') {
+    // a deep-rooted pattern (//…) carries deep on its first step;
+    // emit the // there rather than a redundant root slash
+    if (n.steps.length && n.steps[0].deep) return serSteps(n.steps);
+    return '/' + serSteps(n.steps);
+  }
+  return serSteps(n.steps);
+}
+
+function serSteps (steps, descOrSelf) {
+  const parts = [];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    if (s.deep) parts.push('//');
+    else if (i > 0) parts.push('/');
+    parts.push(serStep(s));
+  }
+  return parts.join('');
+}
+
+function serStep (s) {
+  if (s.type === 'self') return '.';
+  if (s.type === 'parent') return '..';
+  let out = '';
+  if (s.axis === 'attribute') out += '@';
+  else if (s.axis && s.axis !== 'child') out += s.axis + '::';
+  out += serTest(s.test);
+  for (const p of s.predicates || []) out += '[' + serExpr(p) + ']';
+  return out;
+}
+
+function serTest (t) {
+  if (t.kind === 'name') return t.name;
+  if (t.name === 'processing-instruction')
+    return 'processing-instruction(' +
+      (t.literal ? "'" + t.literal + "'" : '') + ')';
+  return t.name + '()';
+}
+
+function serExpr (e) {
+  switch (e.type) {
+    case 'num': return String(e.value);
+    case 'str': return "'" + e.value + "'";
+    case 'or': case 'and':
+      return serExpr(e.left) + ' ' + e.type + ' ' + serExpr(e.right);
+    case 'eq': return serExpr(e.left) + '=' + serExpr(e.right);
+    case 'ne': return serExpr(e.left) + '!=' + serExpr(e.right);
+    case 'lt': case 'le': case 'gt': case 'ge':
+    case 'add': case 'sub': case 'mul': case 'div': case 'mod':
+      return serExpr(e.left) + ' ' +
+        (e.type === 'add' ? '+' : e.type === 'sub' ? '-' :
+          e.type === 'mul' ? '*' : e.type) + ' ' + serExpr(e.right);
+    case 'neg': return '-' + serExpr(e.operand);
+    case 'call':
+      return e.name + '(' + (e.args || []).map(serExpr).join(', ') + ')';
+    case 'path': return serLocationPath(e);
+    case 'filterPath':
+      return serExpr(e.base) + '/' + serSteps(e.steps);
+    case 'filter':
+      return serExpr(e.base) +
+        (e.predicates || []).map(p => '[' + serExpr(p) + ']').join('');
+    case 'unionExpr':
+      return serExpr(e.left) + ' | ' + serExpr(e.right);
+    default:
+      throw new Error('cannot serialize expression node: ' + e.type);
+  }
 }
 
 // evaluate a compiled pattern as a boolean match test against one

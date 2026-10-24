@@ -80,3 +80,30 @@ test('id()/key() metadata absolute', () => {
   const c2 = compilePattern('para');
   assert.equal(c2.absolute, false);
 });
+
+// --- xhtml prefix rewrite -------------------------------------------
+// unprefixed element name tests are rewritten to the synthetic xhtml
+// prefix at compile time (XPath 1.0 has no default namespace), so
+// one pattern matches both HTML and XHTML documents
+test('rewrites unprefixed names to the xhtml prefix', () => {
+  assert.equal(compilePattern('para').evalExpr, 'faux:para');
+  assert.equal(compilePattern('chapter/section/para').evalExpr,
+    'faux:chapter/faux:section/faux:para');
+  assert.equal(compilePattern('//div/p').evalExpr, '//faux:div/faux:p');
+  assert.equal(compilePattern("id('intro')/para").evalExpr,
+    "id('intro')/faux:para");
+  assert.equal(compilePattern('para | heading').evalExpr,
+    'faux:para | faux:heading');
+});
+
+test('leaves already-prefixed names alone', () => {
+  assert.equal(compilePattern('svg:circle').evalExpr, 'svg:circle');
+  assert.equal(compilePattern('svg:*').evalExpr, 'svg:*');
+});
+
+test('leaves attribute names and wildcards alone', () => {
+  assert.equal(compilePattern('@name').evalExpr, '@name');
+  assert.equal(compilePattern('*').evalExpr, '*');
+  assert.equal(compilePattern('li[contains(@class, "hidden")]').evalExpr,
+    "faux:li[contains(@class, 'hidden')]");
+});

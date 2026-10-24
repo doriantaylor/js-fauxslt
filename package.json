@@ -1,0 +1,24 @@
+{
+  "name": "fauxslt",
+  "version": "1.0.0",
+  "description": "A basic template processor with XSLT-like behaviour",
+  "keywords": [
+    "template",
+    "xslt"
+  ],
+  "homepage": "https://github.com/doriantaylor/js-fauxslt#readme",
+  "bugs": {
+    "url": "https://github.com/doriantaylor/js-fauxslt/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/doriantaylor/js-fauxslt.git"
+  },
+  "license": "Apache-2.0",
+  "author": "Dorian Taylor",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

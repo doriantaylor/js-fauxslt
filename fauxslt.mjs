@@ -1,55 +1,10 @@
-import MARKUP from 'markup-mixup';
+// FauXSLT module. Template processor with XSLT-like behaviour.
+// See the README for the behavioural contract.
 
-// FauXSLT module
-
-// class for template registry, namespaces etc
-
-export class Registry {
-    constructor () {
-        // templates
-        this.templates = new Map();
-    }
-
-    registerMatch (xpath, fn) {
-    }
-
-    registerNamed (name, fn) {
-    }
-
-    // replaces the node
-    transform (node, params) {
-        // pre-match and cache matches on templates
-
-        // run the template that matches the node that first matches
-        // the fewest nodes, second most recently added
-
-        // replace the node with the result
-    }
-}
-
-// class for the execution context that has the current node and result tree etc
-
-export class Context {
-    constructor (registry, node) {
-        this.registry = registry;
-        this.node     = node;
-    }
-
-    // return whatever it is
-    select (xpath) {
-    }
-
-    // just test if the xpath matches
-    test (xpath) {
-        return !!this.select(xpath);
-    }
-
-    // apply templates to the nodes netted by the xpath expression
-    applyTemplates (xpath, params) {
-        // should return a DocumentFragment or whatever i guess
-    }
-
-    // call a named template on the current node
-    callTemplate (name, params) {
-    }
-}
+export { Registry } from './src/registry.js';
+export { Context } from './src/context.js';
+export { Template } from './src/template.js';
+export { NamespaceMap, DEFAULT_NAMESPACES, XHTML_NAMESPACE,
+  XML_NAMESPACE } from './src/namespaces.js';
+export { compilePattern, UnsupportedPatternError,
+  NotImplementedError } from './src/pattern.js';

@@ -1,7 +1,11 @@
 // browser-side module: loads the library and exposes it on window so
 // playwright tests (which run in node) can drive it via evaluate()
 
-import { Registry, Context } from '../../fauxslt.mjs';
+import * as fauxslt from '../../fauxslt.mjs';
 
-window.fauxslt = { Registry, Context };
+window.fauxslt = fauxslt;
 window.__ready = true;
+
+// expose a fresh copy of the current body HTML for tests that need to
+// snapshot before/after
+window.__snapshot = () => document.body.innerHTML;

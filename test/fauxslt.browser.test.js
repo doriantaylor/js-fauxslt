@@ -48,9 +48,11 @@ test('transform replaces the matched node with the template result', async ({ pa
   await go(page);
   await page.evaluate(() => {
     const faux = new window.fauxslt.Registry();
-    faux.registerMatch('#para', function () {
-      // markup-mixup spec returned from the template
-      return { '#p': 'transformed: ' + this.node.textContent };
+    faux.registerMatch("p[@id='para']", function () {
+      // markup-mixup spec returned from the template; carry the id
+      // so the replacement stays addressable
+      return { '#p': 'transformed: ' + this.node.textContent,
+        id: this.node.getAttribute('id') };
     });
     window.faux = faux;
   });
@@ -67,25 +69,26 @@ test('most specific match wins: fewer nodes selected, ties to newest', async ({ 
     faux.registerMatch('li', function () {
       return { '#li': 'generic ' + this.node.textContent };
     });
-    faux.registerMatch('li.hidden', function () {
+    faux.registerMatch('li[contains(@class, "hidden")]', function () {
       return { '#li': 'hidden ' + this.node.textContent };
     });
     window.faux2 = faux;
   });
 
-  // the li.hidden template should win for the hidden li
+  // the li.hidden template should win for the hidden li. note: after
+  // transform() the original node is detached, so re-query by position
   const txt = await page.evaluate(() => {
-    const li = document.querySelector('li.hidden');
+    const li = document.querySelectorAll('#items li')[2];
     window.faux2.transform(li);
-    return li.textContent;
+    return document.querySelectorAll('#items li')[2].textContent;
   });
   expect(txt).toMatch(/^hidden third$/);
 
-  // and the generic one for the others
+  // and the generic one for the others. positional indexing again:
+  // the replacement li carries no class, so class selectors drift
   const first = await page.evaluate(() => {
-    const li = document.querySelector('li.item:not(.hidden)');
-    window.faux2.transform(li);
-    return li.textContent;
+    window.faux2.transform(document.querySelectorAll('#items li')[0]);
+    return document.querySelectorAll('#items li')[0].textContent;
   });
   expect(first).toMatch(/^generic first$/);
 });
@@ -95,10 +98,13 @@ test('Context binds this.node and supports select/test', async ({ page }) => {
   const out = await page.evaluate(() => {
     const faux = new window.fauxslt.Registry();
     let captured = null;
-    faux.registerMatch('p#para', function () {
+    faux.registerMatch("p[@id='para']", function () {
+      // capture primitives only: evaluate() structured-clones the
+      // return value, and DOM nodes don't survive that meaningfully
       captured = {
         isContext: this instanceof window.fauxslt.Context,
-        node: this.node,
+        nodeId: this.node.id,
+        nodeIsPara: this.node === document.getElementById('para'),
         // select with a function call returns a number
         count: this.select('count(//li)'),
         // test on a predicate
@@ -111,7 +117,8 @@ test('Context binds this.node and supports select/test', async ({ page }) => {
   });
 
   expect(out.isContext).toBe(true);
-  expect(out.node.id).toBe('para');
+  expect(out.nodeId).toBe('para');
+  expect(out.nodeIsPara).toBe(true);
   expect(out.count).toBe(3);
   expect(out.hasHidden).toBe(true);
 });

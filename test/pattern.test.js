@@ -86,14 +86,14 @@ test('id()/key() metadata absolute', () => {
 // prefix at compile time (XPath 1.0 has no default namespace), so
 // one pattern matches both HTML and XHTML documents
 test('rewrites unprefixed names to the xhtml prefix', () => {
-  assert.equal(compilePattern('para').evalExpr, 'faux:para');
+  assert.equal(compilePattern('para').evalExpr, 'html:para');
   assert.equal(compilePattern('chapter/section/para').evalExpr,
-    'faux:chapter/faux:section/faux:para');
-  assert.equal(compilePattern('//div/p').evalExpr, '//faux:div/faux:p');
+    'html:chapter/html:section/html:para');
+  assert.equal(compilePattern('//div/p').evalExpr, '//html:div/html:p');
   assert.equal(compilePattern("id('intro')/para").evalExpr,
-    "id('intro')/faux:para");
+    "id('intro')/html:para");
   assert.equal(compilePattern('para | heading').evalExpr,
-    'faux:para | faux:heading');
+    'html:para | html:heading');
 });
 
 test('leaves already-prefixed names alone', () => {
@@ -105,5 +105,5 @@ test('leaves attribute names and wildcards alone', () => {
   assert.equal(compilePattern('@name').evalExpr, '@name');
   assert.equal(compilePattern('*').evalExpr, '*');
   assert.equal(compilePattern('li[contains(@class, "hidden")]').evalExpr,
-    "faux:li[contains(@class, 'hidden')]");
+    "html:li[contains(@class, 'hidden')]");
 });

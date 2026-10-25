@@ -19,7 +19,7 @@ import { parse } from './xpath-pattern.js';
 // names in XPathEvaluator results) and XHTML documents (where unprefixed
 // XPath names match no namespace at all). the empty prefix has no
 // default namespace in XPath 1.0, so this is the only uniform route.
-export const XHTML_PREFIX = 'faux';
+export const XHTML_PREFIX = 'html';
 
 export class UnsupportedPatternError extends Error {
   constructor (message) {

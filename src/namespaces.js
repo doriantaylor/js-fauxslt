@@ -22,7 +22,7 @@ export const DEFAULT_NAMESPACES = {
 // never consults the resolver for unprefixed names), bound here to
 // XHTML so one pattern matches both HTML and XHTML documents.
 export const XHTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
-export const XHTML_PREFIX = 'faux';
+export const XHTML_PREFIX = 'html';
 
 export class NamespaceMap extends Map {
 
@@ -61,7 +61,14 @@ export class NamespaceMap extends Map {
       let m = /^xmlns(?::(.*))?$/.exec(attr.name);
       if (m) {
         const pfx = m[1] || '';
-        if (pfx && !this.has(pfx)) this.set(pfx, attr.value);
+        // the empty prefix is bound too: a default xmlns declaration
+        // (e.g. on an XHTML root) means unprefixed names live in
+        // that namespace. XPath 1.0 semantics mean the evaluator
+        // won't consult the resolver for unprefixed names — the
+        // compile-time html: rewrite does the actual matching — but
+        // the binding keeps the map correct for XHTML and available
+        // to anything else that consumes the resolver.
+        if (!this.has(pfx)) this.set(pfx, attr.value);
       }
       // namespaced attributes (e.g. xlink:href) carry their own
       else if (attr.namespaceURI && attr.prefix &&

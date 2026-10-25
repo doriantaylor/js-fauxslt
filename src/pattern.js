@@ -1,6 +1,7 @@
 // Pattern front-end for fauxslt: validate XSLT 1.0 §5.2 patterns,
 // extract match metadata, and delegate evaluation to the native
-// DOM XPathEvaluator (document.evaluate).
+// XPathEvaluator (XPathEvaluator.createExpression — the expression
+// is compiled once per document and evaluated repeatedly).
 //
 // The peggy grammar accepts exactly the §5.2 pattern production set
 // and a restricted predicate-expression subset (see the grammar
@@ -15,7 +16,7 @@ import { parse } from './xpath-pattern.js';
 // unprefixed element name tests are rewritten to this prefix so that
 // one expression matches both HTML documents (whose elements the DOM
 // reports as namespace-less but which match XHTML-mapped prefixed
-// names in document.evaluate) and XHTML documents (where unprefixed
+// names in XPathEvaluator results) and XHTML documents (where unprefixed
 // XPath names match no namespace at all). the empty prefix has no
 // default namespace in XPath 1.0, so this is the only uniform route.
 export const XHTML_PREFIX = 'faux';
@@ -64,7 +65,7 @@ export function compilePattern (expr, opts = {}) {
     expr,
     ast,
     absolute: isAbsolute(ast),
-    // the expression actually handed to document.evaluate
+    // the expression actually handed to XPathEvaluator
     evalExpr: reserialize(ast, expr),
   };
 }
@@ -205,54 +206,5 @@ function serExpr (e) {
       return serExpr(e.left) + ' | ' + serExpr(e.right);
     default:
       throw new Error('cannot serialize expression node: ' + e.type);
-  }
-}
-
-// evaluate a compiled pattern as a boolean match test against one
-// node, using the native XPathEvaluator. per §5.2, a pattern matches
-// a node iff evaluating it as an expression with that node as context
-// produces a node-set containing the node.
-export function matchesNode (compiled, node) {
-  const ownerDoc = node.ownerDocument || node;
-  const result = ownerDoc.evaluate(
-    compiled.expr, node, null,
-    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-  for (let i = 0; i < result.snapshotLength; i++)
-    if (result.snapshotItem(i) === node) return true;
-  return false;
-}
-
-// evaluate a compiled pattern as a node-set snapshot (for select())
-export function selectNodes (compiled, node) {
-  const ownerDoc = node.ownerDocument || node;
-  const result = ownerDoc.evaluate(
-    compiled.expr, node, null,
-    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-  const out = [];
-  for (let i = 0; i < result.snapshotLength; i++)
-    out.push(result.snapshotItem(i));
-  return out;
-}
-
-// general expression evaluation for select(): may return nodes,
-// a number, a string, or a boolean, depending on the expression
-export function evaluateExpr (expr, node) {
-  const ownerDoc = node.ownerDocument || node;
-  const result = ownerDoc.evaluate(
-    expr, node, null, XPathResult.ANY_TYPE, null);
-  switch (result.resultType) {
-    case XPathResult.NUMBER_TYPE:
-      return result.numberValue;
-    case XPathResult.STRING_TYPE:
-      return result.stringValue;
-    case XPathResult.BOOLEAN_TYPE:
-      return result.booleanValue;
-    default: {
-      // ANY_TYPE from a node-set expression: iterate
-      const out = [];
-      let n;
-      while ((n = result.iterateNext())) out.push(n);
-      return out;
-    }
   }
 }

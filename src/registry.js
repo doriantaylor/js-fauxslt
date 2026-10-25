@@ -4,7 +4,6 @@
 import MARKUP from 'markup-mixup';
 import { Template } from './template.js';
 import { NamespaceMap } from './namespaces.js';
-import { matchesNode, selectNodes } from './pattern.js';
 import { Context } from './context.js';
 
 export class Registry {
@@ -30,15 +29,18 @@ export class Registry {
     // registry can serve multiple documents; the expressions
     // themselves are reusable across transforms, so they outlive the
     // per-transform match cache and are only held while the document
-    // lives)
+    // lives). a single XPathEvaluator instance serves all documents.
     this._expressions = new WeakMap();
+    this._evaluator = typeof XPathEvaluator === 'function' ?
+      new XPathEvaluator() : null;
   }
 
   // get (or create) a compiled XPathExpression for a pattern in a
-  // document, via document.createExpression. this front-loads the
-  // expression parse to once per (pattern, document) instead of once
-  // per evaluate() call in the match walk, and surfaces expression
-  // errors at first use — consistent with fail-at-registration.
+  // document, via XPathEvaluator.createExpression. this front-loads
+  // the expression parse to once per (pattern, document) instead of
+  // once per evaluate() call in the match walk, and surfaces
+  // expression errors at first use — consistent with
+  // fail-at-registration.
   _compiledExpression (compiled, doc) {
     let byExpr = this._expressions.get(doc);
     if (!byExpr) {
@@ -47,7 +49,8 @@ export class Registry {
     }
     const key = compiled.evalExpr || compiled.expr;
     if (!byExpr.has(key))
-      byExpr.set(key, doc.createExpression(key, this.nsResolver()));
+      byExpr.set(key, this._evaluator.createExpression(
+        key, this.nsResolver()));
     return byExpr.get(key);
   }
 

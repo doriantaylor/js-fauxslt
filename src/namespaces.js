@@ -18,7 +18,7 @@ export const DEFAULT_NAMESPACES = {
 
 // namespace for (non-X)HTML documents: unprefixed element name tests
 // in match patterns are rewritten to this synthetic prefix at compile
-// time (XPath 1.0 has no default namespace, and document.evaluate
+// time (XPath 1.0 has no default namespace, and XPathEvaluator's
 // never consults the resolver for unprefixed names), bound here to
 // XHTML so one pattern matches both HTML and XHTML documents.
 export const XHTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
@@ -79,7 +79,7 @@ export class NamespaceMap extends Map {
     return this;
   }
 
-  // produce a resolver for document.evaluate()
+  // produce a resolver for XPathEvaluator.createExpression()
   resolver () {
     const self = this;
     return function resolveNamespace (prefix) {

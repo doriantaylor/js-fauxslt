@@ -2,3 +2,9 @@ node_modules/
 test-results/
 playwright-report/
 dist/
+
+# editor artifacts — standing policy (house-style STYLE.md)
+.#*
+#*#
+*~
+*.swp

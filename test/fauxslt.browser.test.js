@@ -122,3 +122,33 @@ test('Context binds this.node and supports select/test', async ({ page }) => {
   expect(out.count).toBe(3);
   expect(out.hasHidden).toBe(true);
 });
+
+test('nested spec callbacks bind this to the Context', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Registry();
+    let captured = null;
+    faux.registerMatch("p[@id='para']", function () {
+      captured = { topLevelThisIsContext: this instanceof window.fauxslt.Context };
+      // nested markup-mixup callbacks must bind the Context too
+      return { '#span': [
+        function () {
+          captured.bodyThisIsContext = this instanceof window.fauxslt.Context;
+          return 'body';
+        },
+      ], class: function () {
+        return 'bound-' + (this instanceof window.fauxslt.Context);
+      } };
+    });
+    faux.transform(document.getElementById('para'));
+    const span = document.querySelector('main span');
+    return { ...captured,
+      spanExists: !!span,
+      spanClass: span && span.getAttribute('class') };
+  });
+
+  expect(out.topLevelThisIsContext).toBe(true);
+  expect(out.bodyThisIsContext).toBe(true);
+  expect(out.spanExists).toBe(true);
+  expect(out.spanClass).toBe('bound-true');
+});

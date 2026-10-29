@@ -1,7 +1,7 @@
 // FauXSLT module. Template processor with XSLT-like behaviour.
 // See the README for the behavioural contract.
 
-export { Registry } from './registry.js';
+export { Transform } from './transform.js';
 export { Context } from './context.js';
 export { Template } from './template.js';
 export { NamespaceMap, DEFAULT_NAMESPACES, XHTML_NAMESPACE,

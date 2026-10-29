@@ -9,11 +9,11 @@ const go = async (page) => {
   await page.waitForFunction('window.__ready === true');
 };
 
-test('module imports and exposes Registry/Context in the browser', async ({ page }) => {
+test('module imports and exposes Transform/Context in the browser', async ({ page }) => {
   await go(page);
   const api = await page.evaluate(() => ({
     ready: window.__ready,
-    registry: typeof window.fauxslt.Registry,
+    registry: typeof window.fauxslt.Transform,
     context: typeof window.fauxslt.Context,
   }));
   expect(api.ready).toBe(true);
@@ -21,10 +21,10 @@ test('module imports and exposes Registry/Context in the browser', async ({ page
   expect(api.context).toBe('function');
 });
 
-test('Registry instantiates and registers templates', async ({ page }) => {
+test('Transform instantiates and registers templates', async ({ page }) => {
   await go(page);
   const out = await page.evaluate(() => {
-    const faux = new window.fauxslt.Registry();
+    const faux = new window.fauxslt.Transform();
 
     // registering must return something chainable (or undefined —
     // the contract doesn't promise a return; it must not throw)
@@ -47,7 +47,7 @@ test('Registry instantiates and registers templates', async ({ page }) => {
 test('transform replaces the matched node with the template result', async ({ page }) => {
   await go(page);
   await page.evaluate(() => {
-    const faux = new window.fauxslt.Registry();
+    const faux = new window.fauxslt.Transform();
     faux.registerMatch("p[@id='para']", function () {
       // markup-mixup spec returned from the template; carry the id
       // so the replacement stays addressable
@@ -65,7 +65,7 @@ test('transform replaces the matched node with the template result', async ({ pa
 test('most specific match wins: fewer nodes selected, ties to newest', async ({ page }) => {
   await go(page);
   await page.evaluate(() => {
-    const faux = new window.fauxslt.Registry();
+    const faux = new window.fauxslt.Transform();
     faux.registerMatch('li', function () {
       return { '#li': 'generic ' + this.node.textContent };
     });
@@ -96,7 +96,7 @@ test('most specific match wins: fewer nodes selected, ties to newest', async ({ 
 test('Context binds this.node and supports select/test', async ({ page }) => {
   await go(page);
   const out = await page.evaluate(() => {
-    const faux = new window.fauxslt.Registry();
+    const faux = new window.fauxslt.Transform();
     let captured = null;
     faux.registerMatch("p[@id='para']", function () {
       // capture primitives only: evaluate() structured-clones the
@@ -126,7 +126,7 @@ test('Context binds this.node and supports select/test', async ({ page }) => {
 test('nested spec callbacks bind this to the Context', async ({ page }) => {
   await go(page);
   const out = await page.evaluate(() => {
-    const faux = new window.fauxslt.Registry();
+    const faux = new window.fauxslt.Transform();
     let captured = null;
     faux.registerMatch("p[@id='para']", function () {
       captured = { topLevelThisIsContext: this instanceof window.fauxslt.Context };

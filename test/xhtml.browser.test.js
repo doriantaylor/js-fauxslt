@@ -25,7 +25,7 @@ test('patterns match and transform in XHTML (XML-parsed) documents', async ({ pa
   await page.waitForFunction('window.__ready === true');
 
   const out = await page.evaluate(() => {
-    const faux = new window.fauxslt.Registry();
+    const faux = new window.fauxslt.Transform();
     faux.registerMatch("p[@id='para']", function () {
       return { '#p': 'xhtml-transformed: ' + this.node.textContent };
     });
@@ -50,7 +50,7 @@ test('HTML and XHTML transforms agree via the same pattern', async ({ page }) =>
   await page.goto('/test/browser/page.html');
   await page.waitForFunction('window.__ready === true');
   const htmlOut = await page.evaluate(() => {
-    const faux = new window.fauxslt.Registry();
+    const faux = new window.fauxslt.Transform();
     faux.registerMatch("p[@id='para']", function () {
       return { '#p': 'same: ' + this.node.textContent };
     });
@@ -70,7 +70,7 @@ test('HTML and XHTML transforms agree via the same pattern', async ({ page }) =>
   await page.addScriptTag({ type: 'module', url: '/test/browser/init.js' });
   await page.waitForFunction('window.__ready === true');
   const xhtmlOut = await page.evaluate(() => {
-    const faux = new window.fauxslt.Registry();
+    const faux = new window.fauxslt.Transform();
     faux.registerMatch("p[@id='para']", function () {
       return { '#p': 'same: ' + this.node.textContent };
     });

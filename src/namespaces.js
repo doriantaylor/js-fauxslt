@@ -1,4 +1,4 @@
-// Namespace mappings for fauxslt. The Registry keeps a prefix -> URI
+// Namespace mappings for fauxslt. The Transform needs a prefix -> URI
 // map which (a) drives the native XPathEvaluator's namespace resolver
 // and (b) is available to template code. When constructed without an
 // explicit map, mappings are derived from document.documentElement

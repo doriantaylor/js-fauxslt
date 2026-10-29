@@ -1,12 +1,114 @@
-// FauXSLT Registry: template registry, namespace mappings, and the
+// FauXSLT Transform: template registry, namespace mappings, and the
 // transform driver. See the README for the behavioural contract.
+
+/*
+  What follows in this comment block are human-originated
+  implementation notes.
+
+  Note this module was renamed from `Registry` to `Transform` to be
+  congruent with the alternate XSLT 1.0 root element
+  `<xsl:transform>`, and because the concept of a "stylesheet" is
+  already largely monopolized by CSS.
+
+  The role of the `Transform` class is to act primarily as a resolver
+  for templates and namespaces, as well as provide an entry point for
+  subtree transformation.
+
+  This class mimics an XSLT stylesheet through `registerMatch`
+  (analogous to `<xsl:template match="…">`) and `registerNamed`
+  (analogous to `<xsl:template name="…">`). These will be factory
+  methods for the constructor for `Template`. There is furthermore the
+  `transform` method that begins the transformation process, which
+  should replace the node passed in as an argument. The constructor
+  for `Transform` should provide a mechanism for registering namespace
+  prefix mappings, otherwise it should derive them from a node or
+  `document.documentElement`. That should constitute the public
+  interface.
+
+  An important element of the implementation is the template registry
+  itself. We will need two maps, one keyed by a string representation
+  of the XPath match pattern, and another bye template name. Note that
+  a given `Template` can have both, so the registration functions need
+  to take this into account. Ideally these functions should run the
+  `Template` constructor first and then use the resulting object's
+  instance data for this mapping. The map should take the form
+  `(pattern, Map(mode, template))`, with `null` for the default
+  mode. So really a pattern is a pattern-mode pair. Re-registering a
+  template, whether named or pattern, should overwrite it.
+
+  The `transform(node, params, mode)` method needs to resolve an
+  initial template, and `Context.applyTemplates(xpath, params, mode)`
+  needs to resolve arbitrary XPath (ie NOT the match patterns)
+  relative to the context node (or a null XPath, equivalent to
+  `node.childNodes`). It would be useful therefore for the registry to
+  memoize a `WeakMap` of the form `(node, Set(templates))`, so one
+  could easily derive from there (eg mode, priority) which template to
+  apply.
+
+  To deal with unbound nodes, document fragments, etc, we will also
+  wrap that aforementioned `WeakMap` in another one keyed on the root
+  (eg `document`), so the ultimate form of this structure (we can call
+  it `#nodeMatches`) will be `WeakMap(root, WeakMap(node,
+  Set(templates)))`.
+
+  We will then need a private method (something like `#walk`) that
+  invokes the algorithm to populate these maps, which can be lazy and
+  run at the beginning of `transform`:
+
+  * iterate over each of the registered match templates
+  * extract their rewritten expressions (see `Template`)
+  * create an intermediate structure of the form { xpathString:
+    [compiledExpr, Set(matchingTemplates)] }
+    * (use a plain object to deduplicate the expressions)
+    * (since there will be multiple copies of the same compiled
+      expression which will be semantically identical but have
+      different identities, just use the first one encountered)
+    * once compiled-expression → template relations have been
+      collated, transform the object values into a `Map`
+      * set aside the absolute and the `id()` paths
+      * (these structures can stick around until a new template is registered)
+
+  Now we can consider the actual algorithm to populate `#nodeMatches`:
+
+  * begin at the root (document or fragment) and scan its children
+    * (unbound elements will probably need to be provisionally bound
+      to a `DocumentFragment` or something)
+    * if the node is a document, test the absolute expressions
+    * if the node is the root (not necessarily a document), test the
+      `id()` expressions
+    * test each child node against each compiled expression (boolean is fine)
+    * if the expression matches:
+      * add the (root, WeakMap) pair to #nodeMatches
+      * add the (node, Set) pair to the `WeakMap` if it doesn't exist
+      * add the template to the set
+    * recurse if the child node is an element
+
+  (That might be amenable to being async but we probably want to await
+  it before we actually test anything against it.)
+
+  Since the `Map` and `Set` interfaces are clunky, we should also
+  surface some quasi-private methods like `getMatchingTemplates(node,
+  mode?)` which returns an array of matching templates for the node
+  (and optional mode) sorted by priority, and
+  `getMatchingTemplate(node, mode?)` which just wraps that to get the
+  'best' one.
+
+  It probably also wouldn't hurt to just encapsulate `new
+  XPathevaluator().createExpression` with the embedded namespace
+  mapping to save a step; maybe not try to be clever and just call it
+  `createExpression`. Might as well just make an `#evaluator` member
+  since that's an instance method anyway.
+
+  The ensuing implementation (and its concomitant tests) should
+  reflect this specification.
+ */
 
 import MARKUP from 'markup-mixup';
 import { Template } from './template.js';
 import { NamespaceMap } from './namespaces.js';
 import { Context } from './context.js';
 
-export class Registry {
+export class Transform {
 
   constructor (namespaces) {
     this.namespaces = new NamespaceMap(namespaces);

@@ -158,8 +158,10 @@ test('rewrite: single-step patterns pass through', () => {
 
 test('rewrite: predicates on the last step are preserved', () => {
   const c = compilePattern('a/b[@class="x"]');
+  // the ancestry predicate is PREPENDED, per the spec: own
+  // predicates follow it
   assert.equal(c.branches[0].evalExpr,
-    "html:b[@class='x'][parent::html:a]");
+    "html:b[parent::html:a][@class='x']");
 });
 
 test('rewrite: absolute patterns are not rewritten', () => {
@@ -167,4 +169,24 @@ test('rewrite: absolute patterns are not rewritten', () => {
   assert.ok(c.branches[0].absolute);
   // no ancestry predicate; only the xhtml prefix rewrite applies
   assert.equal(c.branches[0].evalExpr, '/html:doc/html:para');
+});
+
+test('rewrite: single-step patterns with predicates keep their order', () => {
+  // no rewrite for single-step branches; the xhtml prefix applies
+  const c = compilePattern('li[@class="x"][2]');
+  assert.equal(c.branches[0].evalExpr,
+    "html:li[@class='x'][2]");
+});
+
+// --- root pattern ---------------------------------------------------
+test('compilePattern: / parses as the root pattern', () => {
+  const c = compilePattern('/');
+  assert.equal(c.expr, '/');
+  assert.equal(c.branches.length, 1);
+  // the root pattern is absolute and netted only from the root
+  assert.equal(c.branches[0].absolute, true);
+  assert.equal(c.absolute, true);
+  assert.equal(c.branches[0].evalExpr, '/');
+  // §5.5 priority for a bare / is 0 (treated as an empty step list)
+  assert.equal(c.branches[0].priority, 0);
 });

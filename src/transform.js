@@ -196,15 +196,6 @@ export class Transform {
         return out;
     }
 
-    // evaluate an expression against a candidate node in boolean
-    // mode: does this node match this expression?
-    #evaluateBool (string, node) {
-        const doc = node.ownerDocument || node;
-        const expr = this.#getExpression(string, doc);
-        const r = expr.evaluate(node, XPathResult.BOOLEAN_TYPE, null);
-        return r.booleanValue;
-    }
-
     // register a template against a match pattern. the pattern is
     // compiled (validated) immediately; invalid syntax throws here.
     // the third argument is polyvalent: an options object
@@ -253,15 +244,12 @@ export class Transform {
         return this.namespaces.resolver();
     }
 
-    // evaluate a match pattern as a node-set, through the per-transform
-    // cache. absolute patterns (rooted with / or //) evaluate once
     // collate the registered match templates into a compiled
     // expression index: Map of expression string ->
-    // { string, templates: Set(Template), bool: boolExpr? },
-    // deduplicating semantically identical expressions (the first
-    // Template's compiled copy is canonical). absolute and id()
-    // branches are set aside for root testing. rebuilt lazily after
-    // any registration.
+    // { string, templates: Set(Template) }, deduplicating
+    // semantically identical expressions (the first Template's
+    // compiled copy is canonical). absolute and id() branches are set
+    // aside for root testing. rebuilt lazily after any registration.
     #collate () {
         if (this.#collated) return this.#collated;
         const byString = new Map();
@@ -277,8 +265,7 @@ export class Transform {
                 }
                 let entry = byString.get(string);
                 if (!entry) {
-                    entry = { string, bool: b.boolExpr,
-                        templates: new Set() };
+                    entry = { string, templates: new Set() };
                     byString.set(string, entry);
                 }
                 entry.templates.add(t);
@@ -290,11 +277,19 @@ export class Transform {
     }
 
     // populate #nodeMatches for a root, per the spec's algorithm:
-    // walk the tree from the root, test each node against each
-    // collated expression (boolean mode where the rewritten branch
-    // provides a self-anchored form, per-context node-set evaluation
-    // otherwise), and record the matching templates per node.
-    // absolute and id() branches are tested once against the root.
+    // walk the tree from the root and, at each visited ELEMENT or
+    // DOCUMENT, evaluate every collated expression in NODE-SET mode
+    // with the visited node as CONTEXT, recording every netted node
+    // (the parent-as-context scan). the context is always an element
+    // or document — the only kinds the DOM XPath API accepts — so
+    // patterns netting text, comment, PI, or attribute nodes are
+    // evaluated from each node's parent and the match is recorded
+    // against the netted node itself. this makes node-test patterns
+    // (text(), comment(), processing-instruction()) and attribute
+    // patterns (@attr) genuinely matchable. each rewritten expression
+    // nets each node exactly once (at its parent), so the cost
+    // profile matches the earlier per-candidate scan. absolute and
+    // id() branches are tested once against the root.
     #walk (root) {
         if (this.#nodeMatches.has(root))
             return this.#nodeMatches.get(root);
@@ -319,23 +314,21 @@ export class Transform {
             for (const n of this.#evaluateNodes(string, root))
                 record(n, template);
 
-        // visit every node in document order, testing each ELEMENT
-        // against every collated expression: XPath 1.0 only accepts
-        // documents and elements as context nodes, so text, comments,
-        // etc. cannot be tested (and cannot match element/attribute
-        // patterns). they are still visited so their element children
-        // are reached.
+        // visit every node in document order, evaluating each
+        // collated expression with each visited ELEMENT or DOCUMENT
+        // as context and recording every node it nets: XPath 1.0
+        // only accepts documents and elements as context nodes, so
+        // text, comments, etc. cannot serve as context — but they
+        // are netted from their parents, which is what makes them
+        // matchable. all nodes are still visited so their element
+        // children are reached.
         const visit = (node) => {
             const testable = node.nodeType === 1 || node.nodeType === 9;
             if (testable) {
-                for (const entry of byString.values()) {
-                    const hit = entry.bool ?
-                        this.#evaluateBool(entry.bool, node) :
-                        this.#evaluateNodes(entry.string, node)
-                            .includes(node);
-                    if (hit)
-                        for (const t of entry.templates) record(node, t);
-                }
+                for (const entry of byString.values())
+                    for (const n of
+                        this.#evaluateNodes(entry.string, node))
+                        for (const t of entry.templates) record(n, t);
             }
             if (node.childNodes)
                 for (const child of node.childNodes) visit(child);
@@ -349,9 +342,10 @@ export class Transform {
     }
 
     // array of matching templates for a node in a mode (null for
-    // the default), sorted by descending priority; equal priorities
-    // keep registration order (the Set iterates in insertion
-    // sequence). per XSLT 1.0 §5.4, a template only applies in its
+    // the default), sorted by descending priority. the sort is
+    // stable over the Set's insertion order, so equal priorities
+    // keep REGISTRATION order: the first-registered template wins
+    // ties. per XSLT 1.0 §5.4, a template only applies in its
     // own mode: no fallback to default-mode templates.
     getMatchingTemplates (node, mode = null) {
         const root = node.ownerDocument || node;
@@ -364,7 +358,7 @@ export class Transform {
     }
 
     // the single best template for a node in a mode: highest
-    // priority, most recently registered on ties
+    // priority, first-registered wins ties
     getMatchingTemplate (node, mode = null) {
         const ts = this.getMatchingTemplates(node, mode);
         return ts.length ? ts[0] : null;

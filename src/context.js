@@ -76,10 +76,14 @@
 
 export class Context {
 
-  constructor (registry, node, params) {
+  constructor (registry, node, params, mode = null) {
     this.registry = registry;
     this.node = node;
     this.doc = node.ownerDocument || node;
+
+    // the active mode, inherited through applyTemplates unless
+    // overridden; null is the default mode
+    this.mode = mode;
 
     // parameters are yoked to the Context at mint: each invocation
     // gets its own (shallow) copy, so downstream templates can mutate
@@ -117,16 +121,18 @@ export class Context {
   }
 
   // find the best template for a node through the registry's
-  // node-match index
+  // node-match index, in the active mode
   _bestTemplate (node) {
-    return this.registry.getMatchingTemplate(node);
+    return this.registry.getMatchingTemplate(node, this.mode);
   }
 
   // apply templates to the nodes netted by the expression (default:
-  // the current node's children). returns an array of results —
-  // markup-mixup specs and/or DOM nodes — or an empty array. this is
-  // itself a valid spec, so DOM assembly stays in `Transform.transform`.
-  applyTemplates (expression, params) {
+  // the current node's children). the mode is inherited from this
+  // Context unless overridden by the third argument. returns an
+  // array of results — markup-mixup specs and/or DOM nodes — or an
+  // empty array. this is itself a valid spec, so DOM assembly stays
+  // in `Transform.transform`.
+  applyTemplates (expression, params, mode) {
     let nodes = [];
     if (typeof expression === 'undefined' ||
       expression === null || expression === '')
@@ -136,9 +142,13 @@ export class Context {
       nodes = Array.isArray(out) ? out : [out];
     }
 
+    const m = typeof mode === 'undefined' ? this.mode : mode;
     const results = [];
     for (const n of nodes) {
-      const t = this._bestTemplate(n);
+      // bypass the registry for non-elements: XPath patterns cannot
+      // match them, so they pass through untouched
+      const t = n.nodeType === 1 ?
+        this.registry.getMatchingTemplate(n, m) : null;
       if (!t) {
         // no template: keep the node as-is. this mirrors the
         // built-in template rule of XSLT, which passes unclaimed
@@ -147,9 +157,10 @@ export class Context {
         results.push(n.cloneNode(true));
         continue;
       }
-      // fresh Context per node: params merge incoming over current
+      // fresh Context per node: params merge incoming over current,
+      // mode inherited
       const ctx = new Context(this.registry, n,
-        Object.assign({}, this.params, params));
+        Object.assign({}, this.params, params), m);
       const result = t.fn(ctx);
       if (result === null || typeof result === 'undefined') continue;
       results.push(result);

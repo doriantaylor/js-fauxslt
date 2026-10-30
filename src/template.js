@@ -74,7 +74,8 @@ export class Template {
   #priority = null;
   #matchExpr = null;
 
-  constructor ({ match = null, name = null, fn, priority = null }) {
+  constructor ({ match = null, name = null, fn, priority = null,
+    mode = null }) {
     if (typeof fn !== 'function')
       throw new TypeError('template requires a function');
 
@@ -84,6 +85,10 @@ export class Template {
 
     this.name = name;
     this.fn = fn;
+
+    // the mode the template is registered under: null is the
+    // default mode, per the transform spec's pattern-mode pair
+    this.mode = typeof mode === 'string' ? mode : null;
 
     // an explicit priority overrides the §5.5 computed default
     this.#priority = typeof priority === 'number' ? priority : null;

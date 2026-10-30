@@ -207,15 +207,41 @@ export class Transform {
 
     // register a template against a match pattern. the pattern is
     // compiled (validated) immediately; invalid syntax throws here.
-    registerMatch (match, fn) {
-        const t = new Template({ match, fn });
-        this.templates.set(t.key, t);
+    // the third argument is polyvalent: an options object
+    // { mode?, priority?, name? } or a mode string, with priority
+    // and name following positionally. re-registering the same
+    // pattern+mode overwrites.
+    registerMatch (match, fn, opts) {
+        let mode = null, priority = null, name = null;
+        if (typeof opts === 'string') mode = opts;
+        else if (typeof opts === 'number') priority = opts;
+        else if (opts && typeof opts === 'object') {
+            mode = opts.mode || null;
+            priority = opts.priority;
+            name = opts.name || null;
+        }
+        const t = new Template({ match, fn, mode, priority, name });
+
+        // the pattern map is keyed by pattern, then by mode: a
+        // pattern is really a pattern-mode pair
+        let byMode = this.templates.get(t.pattern);
+        if (!byMode) {
+            byMode = new Map();
+            this.templates.set(t.pattern, byMode);
+        }
+        byMode.set(mode, t);
+
+        // a named registration alongside the pattern keys the name
+        // map too (a template may key on both)
+        if (name) this.named.set(name, t);
+
         // the collated expression index is stale: rebuild on demand
         this.#collated = null;
         return t;
     }
 
-    // register a named template
+    // register a named template. named templates are modeless, per
+    // XSLT: callTemplate does not take a mode.
     registerNamed (name, fn) {
         const t = new Template({ name, fn });
         this.named.set(name, t);
@@ -240,7 +266,9 @@ export class Transform {
         if (this.#collated) return this.#collated;
         const byString = new Map();
         const absolutes = [];
-        for (const t of this.templates.values()) {
+        // this.templates maps pattern -> Map(mode -> Template)
+        for (const byMode of this.templates.values())
+        for (const t of byMode.values()) {
             for (const b of t.branches || []) {
                 const string = b.evalExpr;
                 if (b.absolute) {
@@ -320,24 +348,25 @@ export class Transform {
         return byNode;
     }
 
-    // array of matching templates for a node, sorted by descending
-    // priority; equal priorities keep registration order (the Set
-    // iterates in insertion sequence). the mode parameter arrives
-    // with mode support (see the registration spec).
-    getMatchingTemplates (node) {
+    // array of matching templates for a node in a mode (null for
+    // the default), sorted by descending priority; equal priorities
+    // keep registration order (the Set iterates in insertion
+    // sequence). per XSLT 1.0 §5.4, a template only applies in its
+    // own mode: no fallback to default-mode templates.
+    getMatchingTemplates (node, mode = null) {
         const root = node.ownerDocument || node;
         const byNode = this.#walk(root);
         const set = byNode.get(node);
         if (!set || !set.size) return [];
-        return Array.from(set).sort((a, b) =>
-            b.getPriority() - a.getPriority());
+        return Array.from(set)
+            .filter(t => t.mode === mode)
+            .sort((a, b) => b.getPriority() - a.getPriority());
     }
 
-    // the single best template for a node: highest priority, most
-    // recently registered on ties (sort stability over the Set's
-    // insertion sequence)
-    getMatchingTemplate (node) {
-        const ts = this.getMatchingTemplates(node);
+    // the single best template for a node in a mode: highest
+    // priority, most recently registered on ties
+    getMatchingTemplate (node, mode = null) {
+        const ts = this.getMatchingTemplates(node, mode);
         return ts.length ? ts[0] : null;
     }
 
@@ -346,11 +375,11 @@ export class Transform {
     // node with the result. all DOM assembly happens here, via MARKUP.
     // the node-match index is per document state: transforms mutate
     // the DOM, so it is dropped and rebuilt lazily on each call.
-    transform (node, params) {
+    transform (node, params, mode = null) {
         this.#nodeMatches = new WeakMap();
 
-        const ctx  = new Context(this, node, params);
-        const spec = ctx.applyTemplates('self::node()');
+        const ctx  = new Context(this, node, params, mode);
+        const spec = ctx.applyTemplates('self::node()', null, mode);
 
         // args carries the Context so nested spec callbacks receive it
         // (as `this` for plain functions, as the first argument

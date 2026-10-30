@@ -276,3 +276,88 @@ test('getMatchingTemplates returns matches sorted by priority', async ({ page })
   expect(out.priorities).toEqual([0.5, 0, -0.5]);
   expect(out.best).toBe(true);
 });
+
+test('modes partition templates: strict matching, inheritance, override', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    const seen = [];
+
+    // default-mode template for li
+    faux.registerMatch('li', function (ctx) {
+      seen.push('default:' + ctx.mode);
+      return { '#li': 'd ' + ctx.node.textContent };
+    });
+    // toc-mode template for li (higher priority: has a predicate)
+    faux.registerMatch('li', function (ctx) {
+      seen.push('toc:' + ctx.mode);
+      return { '#li': 't ' + ctx.node.textContent };
+    }, 'toc');
+
+    // default mode: the default template applies
+    faux.transform(document.querySelectorAll('#items li')[0]);
+    // toc mode: only the toc template applies (strict: no fallback)
+    faux.transform(document.querySelectorAll('#items li')[1], null, 'toc');
+
+    // a node with no template in a mode passes through untouched
+    // (deep copy), per the built-in rule
+    const untouched = (() => {
+      const p = document.getElementById('para');
+      faux.transform(p, null, 'toc');
+      return document.getElementById('para') !== null;
+    })();
+
+    // mode override through applyTemplates: the ul template is
+    // registered IN toc mode, so it runs and its applyTemplates
+    // inherits toc
+    const inner = new window.fauxslt.Transform();
+    const innerSeen = [];
+    inner.registerMatch('ul', function (ctx) {
+      return ctx.applyTemplates('li');
+    }, 'toc');
+    inner.registerMatch('li', function (ctx) {
+      innerSeen.push(ctx.mode);
+      return { '#li': 'd' };
+    });
+    inner.registerMatch('li', function (ctx) {
+      innerSeen.push(ctx.mode);
+      return { '#li': 't' };
+    }, 'toc');
+    inner.transform(document.getElementById('items'), null, 'toc');
+
+    return { seen, untouched, innerSeen };
+  });
+
+  // transform() mode reaches the matched template
+  expect(out.seen).toEqual(['default:null', 'toc:toc']);
+  // no match in mode → pass-through, not fallback
+  expect(out.untouched).toBe(true);
+  // applyTemplates inherits the active mode
+  expect(out.innerSeen).toEqual(['toc', 'toc', 'toc']);
+});
+
+test('registerMatch accepts options and positional mode/priority/name', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    const modes = [];
+    // options form
+    faux.registerMatch('li', function (ctx) {
+      modes.push(ctx.mode); return null;
+    }, { mode: 'opts', priority: 2, name: 'optshim' });
+    // positional form: mode then priority
+    faux.registerMatch('p', function (ctx) {
+      modes.push(ctx.mode); return null;
+    }, 'pos', 1);
+    const byName = faux.named.get('optshim');
+
+    return {
+      named: !!byName,
+      namedPriority: byName && byName.getPriority(),
+      count: faux.templates.size,
+    };
+  });
+  // options form registered the name alongside the pattern
+  expect(out.named).toBe(true);
+  expect(out.namedPriority).toBe(2);
+});

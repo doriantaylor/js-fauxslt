@@ -1,6 +1,72 @@
 // FauXSLT Context: the execution context bound as `this` inside
-// template functions. Exposes the current node and the selection /
-// recursion operations, per the README contract.
+// template functions.
+
+/*
+  What follows in this comment block are human-originated
+  implementation notes.
+
+  The purpose of the execution `Context` is really just to have
+  something to bind template body functions to so `this` can be made
+  use of. Through this mechanism, the execution context makes certain
+  methods and data available to the template body functions.
+
+  Actually `MARKUP` need not be in this module; it only needs to be in
+  the `Transform` module since it will only need to be invoked from
+  `transform`. `MARKUP` furthermore has a `replace` keyword, which
+  makes it possible to replace a target node with the spec. `MARKUP`
+  also walks the spec and constructs the DOM tree all in one shot;
+  there is no incremental composition.
+
+  The constructor indeed needs a backreference to the `Transform`,
+  although only for the purposes of `applyTemplates` and
+  `callTemplate`, as well as the namespace resolver for the other
+  XPath methods. It also requires the current node as the basis for
+  arbitrary XPath expressions.
+
+  Here is how this class would be invoked from `Transform`:
+
+  ```
+  // as part of class Transform
+
+  transform (node, params) {
+    const ctx  = new Context(this, node);
+    const spec = ctx.applyTemplates('self::node()', params);
+
+    // note that MARKUP returns the last node added
+    return MARKUP({ replace: node, spec: spec });
+  }
+  ```
+
+  The implementations of `applyTemplates` and `callTemplate` only need
+  to forward on the return value from the chosen template's body
+  function. DOM manipulation _only_ happens via the `transform` method
+  in the `Transform` class.
+
+  Note that the parameters should propagate, similar to pass-through
+  parameters in later XSLTs, but the parameter object should be copied
+  via `Object.assign` before being handed to the template body
+  function.
+
+  We need analogues of the following functionality for handling
+  arbitrary XPath:
+
+  * `<xsl:apply-templates>`
+  * the `select=` attribute in e.g. `<xsl:variable select="…"/>`
+  * the `test=` attribute in e.g. `<xsl:if test="…"/>`
+  * `<xsl:copy-of>`
+
+  We also need versions of these:
+
+  * `<xsl:call-template>`
+  * the `document()` function (this can just simplify the fetch API
+    and run it synchronously)
+
+  This list may not yet be complete.
+
+  The ensuing implementation (and its concomitant tests) should
+  reflect this specification.
+ */
+
 
 import MARKUP from 'markup-mixup';
 

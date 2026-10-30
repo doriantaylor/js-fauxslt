@@ -1,178 +1,159 @@
 # FauXSLT
 
-**A stopgap for the imminent elimination of XSLT from web
-browsers.**
+> **FauXSLT is a JavaScript workalike of XSLT's .**
 
-The WHATWG has committed to removing XSLT 1.0 from the web platform
-([whatwg/html#11523](https://github.com/whatwg/html/issues/11523)),
-and with it the ability of a plain XML document — an RSS/Atom feed, an
-OPML list, a sitemap, a "skinless" XHTML page — to render itself in a
-browser without JavaScript. This library is the short-term response to
-that removal: if the browser will no longer transform XML for you,
-bring the transform to the document.
+The browser vendors and the WHATWG have [committed to removing XSLT
+1.0 from the Web
+platform](https://github.com/whatwg/html/issues/11523), and with it,
+the ability to transform XML documents, including RSS/Atom, OPML, and
+XHTML, into other structures, including HTML, in the browser without
+resorting to one of the myriad non-standard JavaScript templating
+frameworks. This library, while of course _must_ rely on JavaScript,
+is intended to provide similar functionality.
 
-FauXSLT is *not* an XSLT engine. It is a template registry with
-XSLT-*like* semantics — match templates, named templates, node
-selection — implemented as ordinary JavaScript, with markup generated
-by [markup-mixup](https://github.com/doriantaylor/js-markup-mixup)
-from plain objects and arrays. The long-term argument for keeping
-declarative web templating around lives in the
-[SWeT proposal](https://github.com/doriantaylor/swet); this is the
-bridge until something like it — or a resurrected XSLT — lands.
+That is, FauXSLT is _not_ an XSLT engine; it just takes a similar
+approach to transforming DOM trees.
+
+> There is a separate effort called
+> [SWeT](https://github.com/doriantaylor/swet) which intends to revive
+> modern XSLT ([3.0](https://www.w3.org/TR/xslt-30/) and eventually
+> [4.0](https://qt4cg.org/specifications/xslt-40/Overview.html) and
+> beyond) with well-defined node selection semantics for HTML (XSLT ≥
+> 3.0 already handles JSON) and a new compact syntax.
 
 ## How it works
 
-You register template functions against XPath-ish match expressions,
-then transform a node. FauXSLT finds the template whose match
-expression selects the fewest nodes (most specific match wins), calls
-it, and replaces the node with the result. Template functions receive
-a `Context` bound as `this`, which exposes the current node, node
-selection, and recursive application of templates.
+Create a new `Transform` object and start registering templates with
+match patterns, [just as you
+would](https://www.w3.org/TR/xslt-10/#patterns) with XSLT. The
+template bodies themselves are just ordinary JavaScript functions.
+
+Once your templates are registered, you can `transform` your desired
+target node, which will be replaced by the operation. Templates can be
+also registered by name instead of, or in addition to by pattern, but
+only the pattern-matching templates are invoked from `transform`.
+
+## Example
+
+Here is an example of a simple template that shims in some basic
+structural and presentation markup if it isn't already present:
 
 ```js
-import { Registry } from 'fauxslt';
+// my-transform.js
+
+import { Transform } from 'fauxslt';
 
 // sets up namespace mapping based on `document.documentElement`,
 // plus some sane defaults; Does The Right Thing™ with (non-X)HTML.
-const faux = new Registry();
+const fauXSLT = window.fauXSLT = new Transform();
 
-// like <xsl:template match="…">
-faux.registerMatch('body', function () {
-  // `this` is the execution Context; this.node is the current node
+// suppose we have some out-of-band value
+const isDraft = true;
+
+// this is like <xsl:template match="…">
+fauXSLT.registerMatch('body', () => {
+  // `this` is bound to an execution context, which
+  // has, among other things, the current node
   const classes = Array.from(this.node.classList);
 
-  // return value can be a markup-mixup spec, a DOM node, a
-  // DocumentFragment, or a string
-  return { '#body': [
-    { '#header': this.applyTemplates('/html/head/title') },
-    this.applyTemplates('.//main[1]'),
-    { '#footer': 'fin' },
-  ], class: classes };
+  // mess with css classes
+  if (isDraft && !('draft' in classes)) classes.push('draft');
+
+  const header = this.copyOf('header') ||
+    { '#header':
+      { '#h1': this.select('normalize-string(/html/head/title)') } };
+
+  let main = this.applyTemplates('.//main[not(@hidden)][1]') ||
+    { '#main': this.callTemplate('article-shim') };
+
+  // return value can be a markup-mixup spec or DOM node
+  // or DocumentFragment or whatever
+  return { '#body': [header, main, footer], class: classes };
 });
 
-// like <xsl:template name="…">
-faux.registerNamed('article-shim', function () {
-  const n = this.select('count(.//article)');
-  return n === 1 ? this.applyTemplates('.//article[1]') :
-    n === 0 ? { '#article': this.applyTemplates() } :
+fauXSLT.registerMatch('main[not(@hidden)]', () => {
+  // this returns an object we can use as a node spec
+  const main = this.getAttributes();
+
+  // comme ça
+  main['#main'] = this.callTemplate('article-shim');
+  return main;
+});
+
+// this is like <xsl:template name="…">
+fauXSLT.registerNamed('article-shim', () => {
+  const articles = this.select('count(.//article)');
+
+  return articles === 1 ? this.applyTemplates('.//article[1]') :
+    articles === 0 ? { '#article': this.applyTemplates() } :
     this.applyTemplates();
 });
 
-// replace document.body in place with the transformation
-faux.transform(document.body);
+// now this will replace the body
+fauXSLT.transform(document.body);
 ```
 
-## Design
+## Template Body Functions
 
-The contract is a set of ordinary functions hanging off ordinary
-objects, so everything is inspectable, debuggable, mockable, and
-tree-shakable — no XML syntax to transpile, no WASM to load, no
-special authoring format. Because templates are JavaScript functions,
-the full language is available: variables, closures, imports,
-conditional logic. The declarative core — *which template matches
-which node* — is retained from XSLT; the syntax is not.
+FauXSLT only needs to marshal the templates, since the template bodies
+are just ordinary JavaScript. These take the form `(params) => {
+/* ... */ }`. Template bodies are also bound to a `Context` object
+which sets the `this` keyword. The context provides methods for things
+like selecting and testing nodes, dereferencing documents, and
+applying subsequent templates.
 
-### Registry
+### Return Values
 
-The `Registry` holds templates and namespace bindings and drives
-transformation.
+Template body functions are expected to behave as pure functions: they
+take parameters and return a value, and don't rely on side effects.
+The return value is expected to be a _spec_ suitable for uptake by the
+declarative markup generator
+[`markup-mixup`](https://github.com/doriantaylor/js-markup-mixup),
+which includes most subclasses of (DOM)
+[Node](https://developer.mozilla.org/en-US/docs/Web/API/Node). Otherwise
+these specs are just ordinary primitive JS types, where elements are
+represented as objects with the tag name prefixed by the `#` symbol,
+and the other keys as the attributes. For instance, this:
 
-- **`new Registry()`** — create an empty registry.
-- **`registerMatch (expression, fn)`** — register `fn` to run against
-  nodes netted by the match expression. When multiple templates match
-  a node, the one whose expression selects the fewest nodes runs;
-  ties resolve to the most recently registered.
-- **`registerNamed (name, fn)`** — register `fn` under a name for use
-  with `callTemplate`.
-- **`transform (node, params)`** — transform `node` in place: find the
-  best-matching template, call it, and replace `node` with the result.
-  `params` is an optional object passed to the template (analogous to
-  `<xsl:with-param>`).
-
-### Context
-
-The `Context` is the execution context for a template invocation,
-bound as `this` inside template functions.
-
-- **`node`** — the current node.
-- **`select (expression)`** — return whatever the expression nets:
-  a node-set (array-like), a number, or a string, depending on the
-  expression. Returns `null`/`undefined`/zero-length when nothing
-  matches.
-- **`test (expression)`** — truthiness of `select(expression)`.
-- **`applyTemplates (expression?, params?)`** — for every node netted
-  by the expression (default: the current node's children), find the
-  matching template and collect its result. Returns a
-  `DocumentFragment` with the concatenated results, or `null` if
-  nothing matched or was produced.
-- **`callTemplate (name, params?)`** — invoke a named template with
-  the current node as context.
-- **`copyOf (expression)`** — clone the nodes netted by the
-  expression, as a fragment or single node, for splicing into the
-  output.
-
-### What "XPath-ish" means
-
-FauXSLT accepts the XPath subset needed for matching and selection:
-absolute and relative paths, `.` and `..`, `@attribute` steps,
-predicates like `[1]`, `[last()]`, `[not(@hidden)]`, position calls,
-and `count()`. Namespace prefixes resolve against the registry's
-bindings. Unsupported expressions throw rather than silently
-misbehave. CSS selectors are deliberately *not* the format — they
-don't do ancestor descent (`../..`) or raw-text nodes (`text()`),
-which template matching needs.
-
-### Integration patterns
-
-#### Standalone documents (feeds, sitemaps)
-
-Pair the document with a bootstrap `<script>` (the mitigation settled
-on in the WHATWG thread: no new script-execution mechanism is added —
-see [mfreed7's
-polyfill](https://github.com/mfreed7/xslt_polyfill) for the XSLT-native
-equivalent):
-
-```xml
-<?xml version="1.0"?>
-<?xml-stylesheet href="feed.js" type="text/javascript"?>
-<!-- the xml-stylesheet PI is optional; a <script> works too -->
+```js
+{ '#div':
+  { '#h1':
+    ['why ', { '#em': 'hello' }, ', there.'] },
+  id: 'content' }
 ```
 
-where `feed.js` fetches the source document (when running from an
-external file), constructs the `Registry`, and calls `transform()` on
-the root. Because FauXSLT is pure JS, it runs from a `<script>` tag,
-an ES module import, or a server-side bundling step, whichever the
-document can afford.
+will produce `<div id="content"><h1>why <em>hello</em>, there.</h1></div>`.
 
-#### In-page HTML surgery
+> Note that if you return any nodes from the source document, they
+> will be deep-copied instead of transformed, which may or may not be
+> what you want.
 
-For (X)HTML documents, `transform()` operates on live DOM: register
-matches against real elements, and the page rewrites itself as soon
-as the script runs.
+## Invocation
 
-### Relationship to markup-mixup
+Making your transform script a module will conveniently cause it to be
+run after the document tree is constructed, just before the
+`DOMContentLoaded` event — which is exactly when you'd want it to:
 
-Templates return *specs* — plain objects and arrays — and
-markup-mixup bakes them into DOM. Templates never touch the DOM
-directly unless they want to; a returned node or fragment is inserted
-as-is. This separation keeps the declarative shape of a template
-legible at a glance, and lets specs be tested without a DOM by
-comparing objects.
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>transform this</title>
+    <script type="module" src="my-transform.js"></script>
+  </head>
+  <body>
+    <p>change meeee</p>
+  </body>
+</html>
+```
 
-## Limitations (deliberate)
-
-- **Not an XSLT engine.** No `xsl:for-each`-style ordering controls
-  beyond what the match expression nets; no modes, no `xsl:sort`, no
-  keys, no output-method serialization settings. These are
-  expressible in the template functions themselves, which is the
-  point.
-- **No streaming.** The whole source must be in memory.
-- **XPath 1.0 subset.** Enough to match and select; not a complete
-  implementation. Unsupported syntax throws immediately.
-- **Browser and Node.** Requires a DOM implementation (native
-  browser DOM, or jsdom/linkedom server-side); no WASM.
+It also makes managing the dependencies a lot easier. Note as well
+that if you persist the transform (e.g. by attaching it to `window`),
+you can invoke it anytime in the document's lifecycle.
 
 ## Installation
+
+Typical `npm`/`pnpm`/whatever package manager you're used to.
 
 ```sh
 pnpm install fauxslt

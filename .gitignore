@@ -3,7 +3,7 @@ test-results/
 playwright-report/
 dist/
 
-# editor artifacts — standing policy (house-style STYLE.md)
+# editor artifacts — standing policy (house-style README.md)
 .#*
 \#*#
 *~

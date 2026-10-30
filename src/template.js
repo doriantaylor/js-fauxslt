@@ -20,10 +20,7 @@ import { compilePattern } from './pattern.js';
   the XSLT spec), or symbolic name, or both. The `body` is a function
   that returns an object that can serve as a `markup-mixup` spec
   (which includes any instance of `Node`). The function will take a
-  `params` object as an argument which will be synthesized by its
-  execution context and can thus be freelyl manipulated (or ignored),
-  and is expected to be bound (ie via `Function.bind`) to a `Context`
-  object, which provides the `this` to the function.
+  `Context` instance as its argument.
 
   One issue with XSLT (1.0) templates, which the FauXSLT package is
   meant to emulate, is that a _match pattern_ is only a _subset_ of

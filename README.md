@@ -51,42 +51,41 @@ const fauXSLT = window.fauXSLT = new Transform();
 const isDraft = true;
 
 // this is like <xsl:template match="…">
-fauXSLT.registerMatch('body', () => {
-  // `this` is bound to an execution context, which
-  // has, among other things, the current node
-  const classes = Array.from(this.node.classList);
+fauXSLT.registerMatch('body', (ctx) => {
+  // the context is the one-stop shop for data and methods
+  const classes = Array.from(ctx.node.classList);
 
   // mess with css classes
   if (isDraft && !('draft' in classes)) classes.push('draft');
 
-  const header = this.copyOf('header') ||
+  const header = ctx.copyOf('header') ||
     { '#header':
-      { '#h1': this.select('normalize-string(/html/head/title)') } };
+      { '#h1': ctx.select('normalize-string(/html/head/title)') } };
 
-  let main = this.applyTemplates('.//main[not(@hidden)][1]') ||
-    { '#main': this.callTemplate('article-shim') };
+  let main = ctx.applyTemplates('.//main[not(@hidden)][1]') ||
+    { '#main': ctx.callTemplate('article-shim') };
 
   // return value can be a markup-mixup spec or DOM node
   // or DocumentFragment or whatever
   return { '#body': [header, main, footer], class: classes };
 });
 
-fauXSLT.registerMatch('main[not(@hidden)]', () => {
+fauXSLT.registerMatch('main[not(@hidden)]', (ctx) => {
   // this returns an object we can use as a node spec
-  const main = this.getAttributes();
+  const main = ctx.getAttributes();
 
   // comme ça
-  main['#main'] = this.callTemplate('article-shim');
+  main['#main'] = ctx.callTemplate('article-shim');
   return main;
 });
 
 // this is like <xsl:template name="…">
-fauXSLT.registerNamed('article-shim', () => {
-  const articles = this.select('count(.//article)');
+fauXSLT.registerNamed('article-shim', (ctx) => {
+  const articles = ctx.select('count(.//article)');
 
-  return articles === 1 ? this.applyTemplates('.//article[1]') :
-    articles === 0 ? { '#article': this.applyTemplates() } :
-    this.applyTemplates();
+  return articles === 1 ? ctx.applyTemplates('.//article[1]') :
+    articles === 0 ? { '#article': ctx.applyTemplates() } :
+    ctx.applyTemplates();
 });
 
 // now this will replace the body
@@ -96,11 +95,11 @@ fauXSLT.transform(document.body);
 ## Template Body Functions
 
 FauXSLT only needs to marshal the templates, since the template bodies
-are just ordinary JavaScript. These take the form `(params) => {
-/* ... */ }`. Template bodies are also bound to a `Context` object
-which sets the `this` keyword. The context provides methods for things
-like selecting and testing nodes, dereferencing documents, and
-applying subsequent templates.
+are just ordinary JavaScript. These take the form `(ctx) => { /*
+... */ }`. Template bodies are handed a `Context` object as their only
+argument. The context provides access to the current node, the
+parameter set, and methods for things like selecting and testing
+nodes, dereferencing documents, and applying subsequent templates.
 
 ### Return Values
 

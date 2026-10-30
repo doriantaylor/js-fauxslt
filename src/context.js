@@ -1,14 +1,13 @@
-// FauXSLT Context: the execution context bound as `this` inside
-// template functions.
+// FauXSLT Context: the execution context handed to template functions.
 
 /*
   What follows in this comment block are human-originated
   implementation notes.
 
   The purpose of the execution `Context` is really just to have
-  something to bind template body functions to so `this` can be made
-  use of. Through this mechanism, the execution context makes certain
-  methods and data available to the template body functions.
+  something to hand to template body functions. Through this
+  mechanism, the execution context makes certain methods and data
+  available to the template body functions.
 
   Actually `MARKUP` need not be in this module; it only needs to be in
   the `Transform` module since it will only need to be invoked from
@@ -29,11 +28,11 @@
   // as part of class Transform
 
   transform (node, params) {
-    const ctx  = new Context(this, node);
-    const spec = ctx.applyTemplates('self::node()', params);
+      const ctx  = new Context(this, node);
+      const spec = ctx.applyTemplates('self::node()', params);
 
-    // note that MARKUP returns the last node added
-    return MARKUP({ replace: node, spec: spec });
+      // note that MARKUP returns the last node added
+      return MARKUP({ replace: node, spec: spec });
   }
   ```
 

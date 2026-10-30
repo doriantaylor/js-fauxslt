@@ -145,25 +145,30 @@ export class Context {
     const m = typeof mode === 'undefined' ? this.mode : mode;
     const results = [];
     for (const n of nodes) {
-      // bypass the registry for non-elements: XPath patterns cannot
-      // match them, so they pass through untouched
-      const t = n.nodeType === 1 ?
-        this.registry.getMatchingTemplate(n, m) : null;
-      if (!t) {
-        // no template: keep the node as-is. this mirrors the
-        // built-in template rule of XSLT, which passes unclaimed
-        // nodes through (here by deep copy rather than recursion —
-        // a deliberate simplification, documented in the README).
-        results.push(n.cloneNode(true));
-        continue;
+      // uniform registry routing: every child node (any kind) is
+      // looked up like any other. nodes the registry can't net —
+      // non-elements, or elements with no template in the mode —
+      // hit the fallback: elements/documents recurse into their
+      // children (like the built-in rule would), non-elements
+      // produce nothing.
+      const t = this.registry.getMatchingTemplate(n, m);
+      if (t) {
+        // fresh Context per node: params merge incoming over current,
+        // mode inherited
+        const ctx = new Context(this.registry, n,
+          Object.assign({}, this.params, params), m);
+        const result = t.fn(ctx);
+        if (result === null || typeof result === 'undefined') continue;
+        results.push(result);
       }
-      // fresh Context per node: params merge incoming over current,
-      // mode inherited
-      const ctx = new Context(this.registry, n,
-        Object.assign({}, this.params, params), m);
-      const result = t.fn(ctx);
-      if (result === null || typeof result === 'undefined') continue;
-      results.push(result);
+      else if (n.nodeType === 1 || n.nodeType === 9) {
+        // fallback: recurse into children, per the built-in
+        // element rule's shape
+        const ctx = new Context(this.registry, n,
+          Object.assign({}, this.params, params), m);
+        results.push(ctx.applyTemplates());
+      }
+      // non-elements with no template: dropped
     }
     return results;
   }

@@ -76,15 +76,49 @@
     * if the node is a document, test the absolute expressions
     * if the node is the root (not necessarily a document), test the
       `id()` expressions
-    * test each child node against each compiled expression (boolean is fine)
-    * if the expression matches:
-      * add the (root, WeakMap) pair to #nodeMatches
-      * add the (node, Set) pair to the `WeakMap` if it doesn't exist
-      * add the template to the set
-      * recurse if the child node is an element
+    * at each visited ELEMENT or DOCUMENT, evaluate each collated
+      expression in NODE-SET mode with the visited node as CONTEXT,
+      and record every netted node in `#nodeMatches` (the
+      parent-as-context scan). the context node is always an
+      element or document — the only kinds the DOM XPath API
+      accepts as context — so nodes the XPath API refuses as
+      context nodes (text, comment, PI, attribute) are netted from
+      their PARENTS and become genuinely matchable: `text()`,
+      `comment()`, `processing-instruction()`, and `@attr` are
+      ordinary matchable patterns.
+    * recurse into each visited node's children (all kinds), so
+      every element and document in the tree serves as context
+      exactly once
 
   (That might be amenable to being async but we probably want to await
   it before we actually test anything against it.)
+
+  Built-in template rules (XSLT 1.0 §5.8) are installed in the
+  constructor and ONLY in the constructor, as ordinary registered
+  templates in the DEFAULT mode — nothing about them is special,
+  and re-registering the same pattern+mode overwrites one (that IS
+  the supported override path). The rules are: `*` (element rule:
+  recurse into children, no attribute copy; §5.5 priority −0.5),
+  `/` (root rule; priority 0), `text()` (copy the string value),
+  `comment()` (drop), and `processing-instruction()` (drop). `*` and
+  `/` are registered SEPARATELY because `Template.getPriority()`
+  takes the max across branches: a `*|/` union would compute
+  priority 0 and beat bare-name user templates (priority 0) on
+  ties (first-registered wins). This constructor-only,
+  default-mode-only installation deliberately diverges from §5.8's
+  every-mode rule: a node transformed in a non-default mode with no
+  matching template hits the fallback below rather than a built-in.
+
+  The matching engine hands `Context.applyTemplates` a node-set;
+  each netted node is routed through the registry uniformly (any
+  node kind). A node with no matching template in the active mode
+  hits the fallback: elements and documents recurse into their
+  children (like the built-in element rule), and non-elements
+  produce nothing. There is no deep-copy pass-through and no
+  special-cased structural dispatch: the built-ins ARE templates,
+  so the same routing that selects them selects user templates.
+  DocumentType nodes are never netted by any XPath node test, so
+  they fall to the no-children fallback and drop, uniformly.
 
   Since the `Map` and `Set` interfaces are clunky, we should also
   surface some quasi-private methods like `getMatchingTemplates(node,
@@ -117,6 +151,43 @@ export class Transform {
     #expressions;
     #evaluator;
 
+    // built-in template bodies per XSLT 1.0 §5.8. these are plain
+    // functions of a Context, just like user template bodies — the
+    // built-ins are registered through the ordinary registerMatch
+    // path and are overwriteable by re-registration like any
+    // template. static so the function identities are shared across
+    // instances.
+
+    // the default element rule: recurse into children only.
+    // attributes are NOT copied — per §5.8.
+    static #builtinElement = function (ctx) {
+        return ctx.applyTemplates();
+    };
+
+    // the default root rule: same body as the element rule (§5.8
+    // gives / and * the same body), but registered separately so
+    // their priorities stay distinct (Template.getPriority takes
+    // the max across branches; a combined */ union would compute
+    // priority 0 and beat bare-name user templates on ties).
+    static #builtinRoot = function (ctx) {
+        return ctx.applyTemplates();
+    };
+
+    // the default text rule: copy the string value
+    static #builtinText = function (ctx) {
+        return ctx.node.data;
+    };
+
+    // the default comment rule: dropped
+    static #builtinComment = function (ctx) {
+        return null;
+    };
+
+    // the default processing-instruction rule: dropped
+    static #builtinPI = function (ctx) {
+        return null;
+    };
+
     constructor (namespaces) {
         this.namespaces = new NamespaceMap(namespaces);
 
@@ -129,6 +200,24 @@ export class Transform {
         // { key -> Template }
         this.templates = new Map();
         this.named = new Map();
+
+        // §5.8 built-in template rules, installed in the CONSTRUCTOR
+        // and only in the DEFAULT MODE, as ordinary registered
+        // templates: nothing about them is special, and a user
+        // re-registering the same pattern+mode overwrites one. this
+        // diverges from §5.8, which installs the rules in EVERY
+        // mode — deliberate, documented in the README. registering
+        // * and / as separate patterns (not *|/) keeps their
+        // priorities distinct: getPriority takes the max across
+        // branches, so a union would compute 0 and beat bare-name
+        // user templates (priority 0) on ties, where first-
+        // registered wins.
+        this.registerMatch('*', Transform.#builtinElement);
+        this.registerMatch('/', Transform.#builtinRoot);
+        this.registerMatch('text()', Transform.#builtinText);
+        this.registerMatch('comment()', Transform.#builtinComment);
+        this.registerMatch('processing-instruction()',
+            Transform.#builtinPI);
 
         // the node-match index, per spec: WeakMap(root, WeakMap(node,
         // Set(templates))), populated lazily by #walk at the beginning

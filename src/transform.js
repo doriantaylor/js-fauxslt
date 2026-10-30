@@ -178,34 +178,41 @@ export class Transform {
 
     // evaluate a match pattern as a node-set, through the per-transform
     // cache. absolute patterns (rooted with / or //) evaluate once
-    // from the document root. relative patterns are context-dependent:
-    // per section 5.2 they are evaluated with each node as context, so
-    // we walk the tree once, testing every element, and collect the
-    // nodes for which the pattern yields a node-set containing them.
+    // evaluate a match pattern as a node-set union across the whole
+    // tree, through the per-transform cache. absolute patterns
+    // evaluate once from the document root. relative patterns are
+    // context-dependent: per section 5.2 they are evaluated with each
+    // node as context, so we walk the tree once, testing every
+    // element, and collect the nodes for which the pattern yields a
+    // node-set containing them. unions contribute per branch.
     _matchSet (template, root) {
-        const expr = template.match.expr;
+        const expr = template.pattern;
         if (this._matchCache.has(expr))
             return this._matchCache.get(expr);
 
         const set = new Set();
 
-        if (template.match.absolute) {
-            for (const n of this._evaluatePattern(template.match, root))
-                set.add(n);
-        }
-        else {
-            // relative patterns are context-dependent: walk the document
-            // once and evaluate the pattern with every node (plus the
-            // document itself) as context, collecting every node selected.
-            // a node matches the pattern iff it appears in this union,
-            // which anchors the pattern anywhere in the tree, exactly as
-            // xslt match patterns behave.
-            const doc = root.nodeType === 9 ? root : root.ownerDocument;
-            for (const n of this._evaluatePattern(template.match, doc))
-                set.add(n);
-            for (const context of this._walk(doc))
-                for (const n of this._evaluatePattern(template.match, context))
+        for (const branch of template.branches) {
+            if (branch.absolute) {
+                for (const n of this._evaluatePattern(branch, root))
                     set.add(n);
+            }
+            else {
+                // relative branches are context-dependent: evaluate
+                // the branch with every node (plus the document
+                // itself) as context, collecting every node selected.
+                // a node matches iff it appears in this union, which
+                // anchors the pattern anywhere in the tree, exactly
+                // as xslt match patterns behave.
+                const doc =
+                    root.nodeType === 9 ? root : root.ownerDocument;
+                for (const n of this._evaluatePattern(branch, doc))
+                    set.add(n);
+                for (const context of this._walk(doc))
+                    for (const n of
+                        this._evaluatePattern(branch, context))
+                        set.add(n);
+            }
         }
 
         this._matchCache.set(expr, set);
@@ -237,16 +244,20 @@ export class Transform {
         return out;
     }
 
-    // find the best-matching template for a node: the one whose match
-    // set is smallest (most specific); ties to most recently registered
+    // find the best-matching template for a node: highest §5.5
+    // priority; ties break to the most recently registered, which
+    // falls out of Map insertion order (later entries iterated
+    // later), per XSLT 1.0 conflict recovery
     bestMatch (node, root) {
         let best = null;
         for (const t of this.templates.values()) {
             const set = this._matchSet(t, root);
             if (!set.has(node)) continue;
-            if (!best || set.size < best.size ||
-                (set.size === best.size && t.order > best.t.order))
-                best = { t, size: set.size };
+            const p = t.getPriority();
+            // strictly greater only: an equal-priority template
+            // encountered later supersedes only by iteration order,
+            // which IS registration order
+            if (!best || p > best.p) best = { t, p };
         }
         return best ? best.t : null;
     }

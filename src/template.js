@@ -63,13 +63,18 @@ import { compilePattern } from './pattern.js';
   reflect this specification.
  */
 
-// registration counter: higher = more recent, which breaks ties in
-// favour of the most recently registered template
-let _order = 0;
-
 export class Template {
 
-  constructor ({ match = null, name = null, fn }) {
+  // #patterns: the compiled elementary branches of the match
+  // pattern, per pattern.js: { expr, evalExpr, priority, absolute,
+  // ast }. #rewrites: rewritten branch expression -> original
+  // branch, exposing the transformation without recomputing.
+  #patterns = null;
+  #rewrites = null;
+  #priority = null;
+  #matchExpr = null;
+
+  constructor ({ match = null, name = null, fn, priority = null }) {
     if (typeof fn !== 'function')
       throw new TypeError('template requires a function');
 
@@ -77,19 +82,72 @@ export class Template {
       throw new Error(
         'template requires a match pattern, a name, or both');
 
-    this.match = match ? compilePattern(match) : null;
     this.name = name;
     this.fn = fn;
-    this.order = _order++;
+
+    // an explicit priority overrides the §5.5 computed default
+    this.#priority = typeof priority === 'number' ? priority : null;
+
+    if (match) {
+      this.#matchExpr = match;
+      const compiled = compilePattern(match);
+      this.#patterns = compiled.branches;
+      this.#rewrites = new Map(this.#patterns.map(b =>
+        [b.evalExpr, b.expr]));
+    }
+  }
+
+  // the original match pattern string, or null for named-only
+  get pattern () {
+    return this.#matchExpr;
+  }
+
+  // the original elementary branch expressions
+  get patterns () {
+    return this.#patterns ? this.#patterns.map(b => b.expr) : null;
+  }
+
+  // the rewritten expressions actually evaluated
+  get expressions () {
+    return this.#patterns ? this.#patterns.map(b => b.evalExpr) : null;
+  }
+
+  // the match pattern stitched back together from the rewritten
+  // elementary branches (null for named-only templates)
+  get computedPattern () {
+    if (!this.#patterns) return null;
+    return this.#patterns.map(b => b.expr).join(' | ');
+  }
+
+  // explicit override if present, else the computed §5.5 default.
+  // the optional argument accepts an original branch expression, a
+  // rewritten one, or nothing: for a union the branches may carry
+  // different priorities, so the best (highest) is returned.
+  getPriority (pattern) {
+    if (this.#priority !== null) return this.#priority;
+    if (!this.#patterns) return null;
+    if (typeof pattern === 'string') {
+      const b = this.#patterns.find(
+        p => p.expr === pattern || p.evalExpr === pattern);
+      if (b) return b.priority;
+    }
+    return Math.max(...this.#patterns.map(p => p.priority));
+  }
+
+  // compiled branch metadata for the Transform matching engine
+  get branches () {
+    return this.#patterns;
   }
 
   get kind () {
-    return this.match && this.name ? 'match+named' :
-      this.match ? 'match' : 'named';
+    return this.#matchExpr && this.name ? 'match+named' :
+      this.#matchExpr ? 'match' : 'named';
   }
 
-  // identity used for registry storage and the match cache
+  // registry identity: the match pattern keys the pattern map;
+  // named templates key the name map. a template with both keys
+  // into both.
   get key () {
-    return this.name || this.match.expr;
+    return this.name || this.#matchExpr;
   }
 }

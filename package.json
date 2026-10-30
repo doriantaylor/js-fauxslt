@@ -30,8 +30,8 @@
     "build:bundle": "esbuild src/index.js --bundle --format=esm --external:markup-mixup --outfile=dist/fauxslt.js",
     "build:minify": "esbuild src/index.js --bundle --format=esm --external:markup-mixup --minify --outfile=dist/fauxslt.min.js",
     "build": "pnpm build:parser && pnpm build:bundle && pnpm build:minify",
-    "test:unit": "node --test test/pattern.test.js test/template.test.js",
-    "test": "pnpm build && playwright test && node --test test/pattern.test.js test/template.test.js"
+    "test:unit": "node --test test/pattern.test.js test/template.test.js test/expressions.test.js",
+    "test": "pnpm build && playwright test && node --test test/pattern.test.js test/template.test.js test/expressions.test.js"
   },
   "dependencies": {
     "markup-mixup": "file:../js-markup-mixup"

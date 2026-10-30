@@ -74,6 +74,8 @@
  */
 
 
+import { rewriteExpression } from './expressions.js';
+
 export class Context {
 
   constructor (registry, node, params, mode = null) {
@@ -97,10 +99,22 @@ export class Context {
   // string, or boolean depending on the expression. the expression
   // is precompiled per (registry, document) through the registry's
   // XPathExpression cache — select() is typically called in loops,
-  // and createExpression front-loads the parse.
+  // and createExpression front-loads the parse. when the registry
+  // and the context document share a default-namespace state, the
+  // expression is first REWRITTEN: unprefixed element name tests
+  // become `_:name`, resolved against the document's
+  // default-namespace URI by the registry's per-document resolver
+  // (see Transform.effectiveDefaultPrefix). documents without a
+  // default namespace pass through untouched, so unprefixed names
+  // match namespace-less elements natively. this is the same
+  // rewrite match patterns get at registration time, funneled
+  // through the same decision source.
   select (expression) {
+    const prefix = this.registry.effectiveDefaultPrefix(this.doc);
+    const string = prefix ?
+      rewriteExpression(expression, prefix) : expression;
     const expr = this.registry.compiledExpression(
-      expression, this.doc);
+      string, this.doc);
     const r = expr.evaluate(this.node, XPathResult.ANY_TYPE, null);
     switch (r.resultType) {
       case XPathResult.NUMBER_TYPE:  return r.numberValue;

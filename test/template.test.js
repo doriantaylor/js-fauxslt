@@ -11,7 +11,18 @@ test('Template compiles a match pattern into branches', () => {
   assert.equal(t.pattern, 'para | svg:circle');
   assert.equal(t.patterns.length, 2);
   assert.equal(t.expressions.length, 2);
-  assert.equal(t.computedPattern, 'html:para | svg:circle');
+  // no prefix option: patterns pass through unrewritten (the new
+  // default)
+  assert.equal(t.computedPattern, 'para | svg:circle');
+});
+
+test('Template threads the prefix option into compilePattern', () => {
+  const t = new Template({ match: 'para | svg:circle',
+    fn: () => null, prefix: '_' });
+  assert.equal(t.computedPattern, '_:para | svg:circle');
+  const bare = new Template({ match: 'para', fn: () => null,
+    prefix: '_' });
+  assert.equal(bare.computedPattern, '_:para');
 });
 
 test('Template getters are null for named-only templates', () => {
@@ -38,7 +49,7 @@ test('explicit priority overrides the computed default', () => {
 
 test('getPriority accepts a branch expression', () => {
   const t = new Template({ match: 'para | *', fn: () => null });
-  assert.equal(t.getPriority('html:para'), 0);
+  assert.equal(t.getPriority('para'), 0);
   assert.equal(t.getPriority('*'), -0.5);
   // no argument: best (highest) across the union
   assert.equal(t.getPriority(), 0);

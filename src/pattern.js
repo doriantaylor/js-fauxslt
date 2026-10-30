@@ -11,14 +11,16 @@
 // validated and what runs.
 
 import { parse } from './xpath-pattern.js';
+import { DEFAULT_PREFIX } from './namespaces.js';
 
-// synthetic prefix bound to the XHTML namespace at evaluation time.
-// unprefixed element name tests are rewritten to this prefix so that
-// one expression matches both HTML documents (whose elements the DOM
-// reports as namespace-less but which match XHTML-mapped prefixed
-// names in XPathEvaluator results) and XHTML documents (where unprefixed
-// XPath names match no namespace at all). the empty prefix has no
-// default namespace in XPath 1.0, so this is the only uniform route.
+// the synthetic prefix unprefixed element name tests are rewritten
+// to (see namespaces.js): `body` → `_:body` when the document has a
+// default namespace, so the name test matches in an XML-parsed
+// XHTML/Atom/SVG document. documents WITHOUT a default namespace
+// are not rewritten at all — unprefixed names then match
+// namespace-less elements natively. retained as an export for
+// backwards compatibility: it is a real prefix binding, but no
+// longer the rewrite target.
 export const XHTML_PREFIX = 'html';
 
 export class UnsupportedPatternError extends Error {
@@ -102,10 +104,12 @@ function rewriteBranch (branch) {
 }
 
 // compile a pattern: validate syntax, reject key(), rewrite unprefixed
-// element name tests to the XHTML prefix, split unions, compute §5.5
-// priorities, and rewrite relative multi-step branches to single-step
-// form. returns metadata including per-branch { expr, priority,
-// evalExpr, absolute } entries.
+// element name tests to the rewrite prefix (`opts.prefix`, e.g. the
+// synthetic DEFAULT_PREFIX `_` — or nothing, per the falsy default:
+// documents without a default namespace match natively), split
+// unions, compute §5.5 priorities, and rewrite relative multi-step
+// branches to single-step form. returns metadata including per-branch
+// { expr, priority, evalExpr, absolute } entries.
 export function compilePattern (expr, opts = {}) {
   let ast = null;
   try {
@@ -121,13 +125,15 @@ export function compilePattern (expr, opts = {}) {
     throw new NotImplementedError(
       'key() is not implemented: ' + expr);
 
-  const prefix = opts.xhtmlPrefix !== undefined ?
-    opts.xhtmlPrefix : XHTML_PREFIX;
+  // the rewrite target: DEFAULT_PREFIX by explicit request, falsy
+  // (no rewrite) by default
+  const prefix = opts.prefix || null;
 
-  // rewrite unprefixed element name tests to the xhtml prefix so the
-  // expression matches uniformly in HTML and XHTML. attribute names
-  // are left alone: in the HTML DOM attributes are namespace-less,
-  // and unprefixed attribute tests match exactly that.
+  // rewrite unprefixed element name tests to the prefix so the
+  // expression matches in a default-namespaced document. attribute
+  // names are left alone: in the HTML DOM attributes are
+  // namespace-less, and unprefixed attribute tests match exactly
+  // that.
   rewriteNameTests(ast, prefix);
 
   // split unions into elementary branches, compute §5.5 priorities,
@@ -159,8 +165,10 @@ export function compilePattern (expr, opts = {}) {
   };
 }
 
-// walk the AST and prefix unprefixed element name tests
+// walk the AST and prefix unprefixed element name tests. a falsy
+// prefix leaves the AST alone (native XPath 1.0 semantics)
 function rewriteNameTests (node, prefix) {
+  if (!prefix) return;
   if (!node || typeof node !== 'object') return;
   if (node.type === 'step' && node.test && node.test.kind === 'name') {
     const name = node.test.name;

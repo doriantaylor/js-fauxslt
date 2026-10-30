@@ -4,8 +4,11 @@
 export { Transform } from './transform.js';
 export { Context } from './context.js';
 export { Template } from './template.js';
-export { NamespaceMap, DEFAULT_NAMESPACES, XHTML_NAMESPACE,
-  XHTML_PREFIX, XML_NAMESPACE } from './namespaces.js';
+export { NamespaceMap, DEFAULT_NAMESPACES, DEFAULT_PREFIX,
+  XHTML_NAMESPACE, XHTML_PREFIX, XML_NAMESPACE, defaultNamespaceURI }
+  from './namespaces.js';
 export { compilePattern, serializePattern, UnsupportedPatternError,
   NotImplementedError, XHTML_PREFIX as PATTERN_XHTML_PREFIX,
 } from './pattern.js';
+export { rewriteExpression, isDefaultNamespaced }
+  from './expressions.js';

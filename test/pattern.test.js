@@ -81,31 +81,58 @@ test('id()/key() metadata absolute', () => {
   assert.equal(c2.absolute, false);
 });
 
-// --- xhtml prefix rewrite -------------------------------------------
-// unprefixed element name tests are rewritten to the synthetic xhtml
-// prefix at compile time (XPath 1.0 has no default namespace), so
-// one pattern matches both HTML and XHTML documents
-test('rewrites unprefixed names to the xhtml prefix', () => {
-  assert.equal(compilePattern('para').evalExpr, 'html:para');
+// --- name-test rewrite ----------------------------------------------
+// unprefixed element name tests are rewritten ONLY when an explicit
+// prefix is given (the synthetic `_` when the document has a default
+// namespace); the default is NO rewrite, so unprefixed names keep
+// their native XPath 1.0 semantics (matching namespace-less
+// elements) in HTML and no-namespace XML documents
+test('rewrites unprefixed names to the explicit prefix', () => {
+  assert.equal(compilePattern('para', { prefix: '_' }).evalExpr,
+    '_:para');
+  assert.equal(
+    compilePattern('chapter/section/para', { prefix: '_' }).evalExpr,
+    '_:chapter/_:section/_:para');
+  assert.equal(compilePattern('//div/p', { prefix: '_' }).evalExpr,
+    '//_:div/_:p');
+  assert.equal(
+    compilePattern("id('intro')/para", { prefix: '_' }).evalExpr,
+    "id('intro')/_:para");
+  assert.equal(
+    compilePattern('para | heading', { prefix: '_' }).evalExpr,
+    '_:para | _:heading');
+});
+
+test('no prefix by default: patterns pass through unrewritten', () => {
+  assert.equal(compilePattern('para').evalExpr, 'para');
   assert.equal(compilePattern('chapter/section/para').evalExpr,
-    'html:chapter/html:section/html:para');
-  assert.equal(compilePattern('//div/p').evalExpr, '//html:div/html:p');
+    'chapter/section/para');
+  assert.equal(compilePattern('//div/p').evalExpr, '//div/p');
   assert.equal(compilePattern("id('intro')/para").evalExpr,
-    "id('intro')/html:para");
+    "id('intro')/para");
   assert.equal(compilePattern('para | heading').evalExpr,
-    'html:para | html:heading');
+    'para | heading');
 });
 
 test('leaves already-prefixed names alone', () => {
   assert.equal(compilePattern('svg:circle').evalExpr, 'svg:circle');
   assert.equal(compilePattern('svg:*').evalExpr, 'svg:*');
+  assert.equal(
+    compilePattern('svg:circle', { prefix: '_' }).evalExpr,
+    'svg:circle');
+  assert.equal(compilePattern('svg:*', { prefix: '_' }).evalExpr,
+    'svg:*');
 });
 
 test('leaves attribute names and wildcards alone', () => {
   assert.equal(compilePattern('@name').evalExpr, '@name');
   assert.equal(compilePattern('*').evalExpr, '*');
-  assert.equal(compilePattern('li[contains(@class, "hidden")]').evalExpr,
-    "html:li[contains(@class, 'hidden')]");
+  assert.equal(compilePattern('*', { prefix: '_' }).evalExpr, '*');
+  assert.equal(compilePattern('@name', { prefix: '_' }).evalExpr,
+    '@name');
+  assert.equal(compilePattern(
+    'li[contains(@class, "hidden")]', { prefix: '_' }).evalExpr,
+    "_:li[contains(@class, 'hidden')]");
 });
 // --- §5.5 default priorities ---------------------------------------
 const prio = (expr, expected) => () => {
@@ -131,54 +158,63 @@ test('priority: last step governs in multi-step', prio('chapter/para', 0));
 
 // --- union branch splitting -----------------------------------------
 test('unions split into elementary branches with priorities', () => {
-  const c = compilePattern('para | * | svg:circle');
+  const c = compilePattern('para | * | svg:circle',
+    { prefix: '_' });
   assert.equal(c.branches.length, 3);
   assert.equal(c.branches[0].priority, 0);
   assert.equal(c.branches[1].priority, -0.5);
   assert.equal(c.branches[2].priority, 0);
   // each branch serializes to its own single-step expression
-  assert.equal(c.branches[0].expr, 'html:para');
+  assert.equal(c.branches[0].expr, '_:para');
 });
 
 // --- multi-step rewrite to default (child) axis ---------------------
 test('rewrite: a/b becomes b[parent::a]', () => {
-  const c = compilePattern('a/b');
-  assert.equal(c.branches[0].evalExpr, 'html:b[parent::html:a]');
+  const c = compilePattern('a/b', { prefix: '_' });
+  assert.equal(c.branches[0].evalExpr, '_:b[parent::_:a]');
 });
 
 test('rewrite: a/b//c becomes c[ancestor-or-self::b/parent::a]', () => {
-  const c = compilePattern('a/b//c');
+  const c = compilePattern('a/b//c', { prefix: '_' });
   assert.equal(
     c.branches[0].evalExpr,
-    'html:c[ancestor-or-self::html:b/parent::html:a]');
+    '_:c[ancestor-or-self::_:b/parent::_:a]');
 });
 
 test('rewrite: single-step patterns pass through', () => {
-  const c = compilePattern('para');
-  assert.equal(c.branches[0].evalExpr, 'html:para');
+  const c = compilePattern('para', { prefix: '_' });
+  assert.equal(c.branches[0].evalExpr, '_:para');
 });
 
 test('rewrite: predicates on the last step are preserved', () => {
-  const c = compilePattern('a/b[@class="x"]');
+  const c = compilePattern('a/b[@class="x"]', { prefix: '_' });
   // the ancestry predicate is APPENDED: the step's own predicates
   // keep their natural (§5.5) order, which positional predicates
   // require
   assert.equal(c.branches[0].evalExpr,
-    "html:b[@class='x'][parent::html:a]");
+    "_:b[@class='x'][parent::_:a]");
 });
 
 test('rewrite: absolute patterns are not rewritten', () => {
-  const c = compilePattern('/doc/para');
+  const c = compilePattern('/doc/para', { prefix: '_' });
   assert.ok(c.branches[0].absolute);
-  // no ancestry predicate; only the xhtml prefix rewrite applies
-  assert.equal(c.branches[0].evalExpr, '/html:doc/html:para');
+  // no ancestry predicate; only the prefix rewrite applies
+  assert.equal(c.branches[0].evalExpr, '/_:doc/_:para');
 });
 
 test('rewrite: single-step patterns with predicates keep their order', () => {
-  // no rewrite for single-step branches; the xhtml prefix applies
-  const c = compilePattern('li[@class="x"][2]');
+  // no ancestry rewrite for single-step branches; only the prefix
+  // applies
+  const c = compilePattern('li[@class="x"][2]', { prefix: '_' });
   assert.equal(c.branches[0].evalExpr,
-    "html:li[@class='x'][2]");
+    "_:li[@class='x'][2]");
+});
+
+// without a prefix the multi-step rewrite still applies, but the
+// name tests stay unprefixed (native matching)
+test('rewrite: ancestry predicates work without a prefix too', () => {
+  const c = compilePattern('a/b');
+  assert.equal(c.branches[0].evalExpr, 'b[parent::a]');
 });
 
 // --- root pattern ---------------------------------------------------

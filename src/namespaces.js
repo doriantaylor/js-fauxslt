@@ -16,19 +16,46 @@ export const DEFAULT_NAMESPACES = {
   xmlns: 'http://www.w3.org/2000/xmlns/',
 };
 
-// namespace for (non-X)HTML documents: unprefixed element name tests
-// in match patterns are rewritten to this synthetic prefix at compile
-// time (XPath 1.0 has no default namespace, and XPathEvaluator's
-// never consults the resolver for unprefixed names), bound here to
-// XHTML so one pattern matches both HTML and XHTML documents.
+// namespace for (non-X)HTML documents: a real default binding for the
+// prefix \`html:\`, kept for prefixed usage in templates. it no longer
+// drives the pattern rewrite (see DEFAULT_PREFIX).
 export const XHTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
 export const XHTML_PREFIX = 'html';
+
+// the synthetic prefix spelled \`_\` (a legal NCName) that unprefixed
+// element name tests are rewritten to when the document has a default
+// namespace. XPath 1.0 has no default namespace: the evaluator is
+// NEVER consulted for the empty prefix (operator-verified in Firefox
+// and Chromium), so a document like an XHTML page, an Atom feed, or
+// an SVG image — one whose root carries an unprefixed xmlns — needs
+// \`body\` rewritten to \`_:body\` for the name test to match anything.
+// documents WITHOUT a default namespace (HTML parsed as text/html,
+// no-namespace XML) are not rewritten: unprefixed names then match
+// namespace-less elements natively. collision rule: a user-declared
+// \`_\` binding (an xmlns:_ attribute in scope on the document root,
+// or a \`_\` key in the explicit namespace map) WINS, and the rewrite
+// is disabled for that document — the user's own \`_:foo\` patterns
+// and expressions mean what they declared.
+export const DEFAULT_PREFIX = '_';
+
+// the root's default-namespace URI: the value of an unprefixed xmlns
+// attribute on the document element, or null when there is none. an
+// EMPTY-string value (xmlns="", a default-namespace UNdeclaration)
+// counts as no default namespace, so no \`_:name\` is ever resolved
+// against an empty-string URI. reads the raw document, so it works
+// before a Transform exists.
+export function defaultNamespaceURI (doc) {
+  const elem = doc && doc.documentElement;
+  if (!elem || typeof elem.getAttribute !== 'function') return null;
+  const val = elem.getAttribute('xmlns');
+  return val ? val : null;
+}
 
 export class NamespaceMap extends Map {
 
   constructor (initial) {
     super(Object.entries(DEFAULT_NAMESPACES));
-    // the synthetic xhtml prefix used by the pattern rewriter
+    // the synthetic xhtml prefix kept as a real binding
     this.set(XHTML_PREFIX, XHTML_NAMESPACE);
     if (initial) this.absorb(initial);
   }
@@ -42,6 +69,10 @@ export class NamespaceMap extends Map {
     else if (typeof mappings === 'object') {
       for (const k of Object.keys(mappings)) this.set(k, mappings[k]);
     }
+    // a non-empty empty-prefix binding means the rewrite target \`_\`
+    // MUST resolve to the default-namespace URI in this map: a
+    // rewritten expression compiles against this very map
+    this.#forceDefaultPrefix();
     return this;
   }
 
@@ -63,11 +94,10 @@ export class NamespaceMap extends Map {
         const pfx = m[1] || '';
         // the empty prefix is bound too: a default xmlns declaration
         // (e.g. on an XHTML root) means unprefixed names live in
-        // that namespace. XPath 1.0 semantics mean the evaluator
-        // won't consult the resolver for unprefixed names — the
-        // compile-time html: rewrite does the actual matching — but
-        // the binding keeps the map correct for XHTML and available
-        // to anything else that consumes the resolver.
+        // that namespace. the rewrite to DEFAULT_PREFIX resolves
+        // through this map, so a non-empty binding forces the `_`
+        // key to the same URI (unless a user-declared `_` is
+        // already present — see #forceDefaultPrefix)
         if (!this.has(pfx)) this.set(pfx, attr.value);
       }
       // namespaced attributes (e.g. xlink:href) carry their own
@@ -75,6 +105,10 @@ export class NamespaceMap extends Map {
         !this.has(attr.prefix))
         this.set(attr.prefix, attr.namespaceURI);
     }
+
+    // a default-namespace declaration was seen (possibly up the
+    // chain): keep the map self-consistent for the rewrite
+    this.#forceDefaultPrefix();
 
     // up the chain
     let p = elem.parentNode;
@@ -84,6 +118,20 @@ export class NamespaceMap extends Map {
     }
 
     return this;
+  }
+
+  // bind the synthetic `_` to the default-namespace URI whenever a
+  // non-empty empty-prefix binding is present. collision rule: a
+  // user-declared `_` wins — its binding is left untouched, and the
+  // rewrite machinery detects it (DEFAULT_PREFIX already taken by a
+  // binding that did not come from the empty-prefix entry) and
+  // stands down for that document.
+  #forceDefaultPrefix () {
+    const uri = this.get('');
+    if (!uri) return;
+    // only bind when `_` is not already taken by a user
+    // declaration — first-wins, same as every other derive entry
+    if (!this.has(DEFAULT_PREFIX)) this.set(DEFAULT_PREFIX, uri);
   }
 
   // produce a resolver for XPathEvaluator.createExpression()

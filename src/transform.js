@@ -143,7 +143,8 @@
 
 import MARKUP from 'markup-mixup';
 import { Template } from './template.js';
-import { NamespaceMap } from './namespaces.js';
+import { NamespaceMap, DEFAULT_PREFIX, defaultNamespaceURI }
+  from './namespaces.js';
 import { Context } from './context.js';
 
 export class Transform {
@@ -154,6 +155,10 @@ export class Transform {
     #collatedAbsolute;
     #expressions;
     #evaluator;
+    // the synthetic `_` prefix for unprefixed name tests, or null
+    // when patterns must not be rewritten (no default namespace, or
+    // the collision rule fired)
+    #rewritePrefix;
 
     // built-in template bodies per XSLT 1.0 §5.8. these are plain
     // functions of a Context, just like user template bodies — the
@@ -282,6 +287,36 @@ export class Transform {
             document.documentElement)
             this.namespaces.derive(document.documentElement);
 
+        // compute the pattern rewrite prefix ONCE, from the
+        // registration-time ambient document (or the explicit map):
+        // the synthetic `_` when a default namespace is in effect —
+        // an unprefixed xmlns on the document root, or a non-empty
+        // empty-prefix binding in an explicit map — and falsy
+        // otherwise, so unprefixed name tests keep their native
+        // XPath 1.0 semantics (matching namespace-less elements).
+        // collision rule: a USER-DECLARED `_` — an xmlns:_ in scope
+        // on the root, or a `_` key in the explicit map — WINS and
+        // disables the rewrite, so the user's own `_:foo` patterns
+        // mean what they declared. derive() already skips its
+        // forced `_` binding when one is present, and its `''`
+        // binding survives here for the explicit-map read.
+        let defaultURI = null;
+        if (namespaces) {
+            const explicit = namespaces instanceof Map ?
+                namespaces.get('') : namespaces[''];
+            if (explicit) defaultURI = explicit;
+        }
+        else if (typeof document !== 'undefined' &&
+            document.documentElement)
+            defaultURI = defaultNamespaceURI(document);
+
+        // a user `_` in effect anywhere in the map stands the
+        // rewrite down
+        const userUnderscore = this.namespaces.has(DEFAULT_PREFIX) &&
+            this.namespaces.get(DEFAULT_PREFIX) !== defaultURI;
+        this.#rewritePrefix =
+            defaultURI && !userUnderscore ? DEFAULT_PREFIX : null;
+
         // compiled match templates and named templates, in the shape
         // { key -> Template }
         this.templates = new Map();
@@ -335,30 +370,9 @@ export class Transform {
     }
 
     // get (or create) a compiled XPathExpression for an expression
-    // string in a document, via #evaluator.createExpression with the
-    // embedded namespace mapping. this front-loads the expression
-    // parse to once per (expression, document) instead of once per
-    // evaluate() call, and surfaces expression errors at first use —
-    // consistent with fail-at-registration.
-    #getExpression (string, doc) {
-        let byExpr = this.#expressions.get(doc);
-        if (!byExpr) {
-            byExpr = new Map();
-            this.#expressions.set(doc, byExpr);
-        }
-        if (!byExpr.has(string))
-            byExpr.set(string, this.#evaluator.createExpression(
-                string, this.nsResolver()));
-        return byExpr.get(string);
-    }
-
-    // get (or create) a compiled XPathExpression for an expression
-    // string in a document, via #evaluator.createExpression with the
-    // embedded namespace mapping. this front-loads the expression
-    // parse to once per (expression, document) instead of once per
-    // evaluate() call, and surfaces expression errors at first use —
-    // consistent with fail-at-registration. public because Context
-    // leans on the same cache for select()/test().
+    // string in a document. public because Context leans on the
+    // same cache for select()/test(); the per-document resolver
+    // lives in #getExpression.
     compiledExpression (string, doc) {
         return this.#getExpression(string, doc);
     }
@@ -391,7 +405,8 @@ export class Transform {
             priority = opts.priority;
             name = opts.name || null;
         }
-        const t = new Template({ match, fn, mode, priority, name });
+        const t = new Template({ match, fn, mode, priority, name,
+            prefix: this.#rewritePrefix });
 
         // the pattern map is keyed by pattern, then by mode: a
         // pattern is really a pattern-mode pair
@@ -422,6 +437,84 @@ export class Transform {
     // namespace resolver for the native evaluator
     nsResolver () {
         return this.namespaces.resolver();
+    }
+
+    // the effective default-namespace state for a document: the
+    // synthetic `_` rewrite is in effect when the registry's
+    // pattern rewrite fired (an explicit map's empty-prefix
+    // binding, or the ambient document's default namespace), and
+    // the evaluation document actually carries a default
+    // namespace that `_` can resolve to — unless the collision
+    // rule fired (a user-declared `_` in scope), in which case
+    // neither patterns nor expressions are rewritten. this is the
+    // ONE source consulted by both the registration-time pattern
+    // decision (the constructor, which computed the prefix from
+    // the same inputs) and the evaluation-time expression decision
+    // (Context.select).
+    effectiveDefaultPrefix (doc) {
+        if (!this.#rewritePrefix) return null;
+        if (!doc || !doc.documentElement) return null;
+        // collision rule: a `_` declared in scope on this document's
+        // root wins and disables the rewrite here too
+        const root = doc.documentElement;
+        for (let p = root; p && p.nodeType === 1; p = p.parentNode)
+            if (p.getAttribute && p.getAttribute('xmlns:_') != null)
+                return null;
+        return defaultNamespaceURI(doc) ? DEFAULT_PREFIX : null;
+    }
+
+    // get (or create) a compiled XPathExpression for an expression
+    // string in a document, via #evaluator.createExpression with a
+    // PER-DOCUMENT namespace resolver: the registry's bindings
+    // merged with derive(doc.documentElement) — first-wins, so a
+    // document's own prefix declarations survive the merge — plus
+    // `_` bound to that document's default-namespace URI, so
+    // expressions rewritten per evaluation document (a template
+    // transforming nodes fetched via ctx.document() — an Atom
+    // feed, an SVG — resolve `_:entry` against THAT document's
+    // namespace, not the ambient one). under the collision rule
+    // the forced binding is skipped: the user-declared `_` rides
+    // the merge untouched. this front-loads the expression parse
+    // to once per (expression, document) instead of once per
+    // evaluate() call, and surfaces expression errors at first
+    // use — consistent with fail-at-registration.
+    #getExpression (string, doc) {
+        let byExpr = this.#expressions.get(doc);
+        if (!byExpr) {
+            byExpr = new Map();
+            this.#expressions.set(doc, byExpr);
+        }
+        if (!byExpr.has(string))
+            byExpr.set(string, this.#evaluator.createExpression(
+                string, this.#docResolver(doc)));
+        return byExpr.get(string);
+    }
+
+    // resolver for a specific evaluation document: the registry
+    // bindings overlaid with the document's own declarations and
+    // the document's default namespace bound to `_` — unless the
+    // document, or the registry's map, already declares its own `_`
+    // (the collision rule)
+    #docResolver (doc) {
+        const merged = new NamespaceMap();
+        merged.absorb(this.namespaces);
+        const elem = doc && doc.documentElement;
+        if (elem && typeof elem.getAttribute === 'function') {
+            // first-wins: drop the registry's `_` (forced or user)
+            // before deriving, so a document's own xmlns:_
+            // declaration survives, then decide whether to force
+            // the default-namespace binding
+            const userUnderscore =
+                elem.getAttribute('xmlns:_') != null ||
+                this.namespaces.has(DEFAULT_PREFIX);
+            merged.delete(DEFAULT_PREFIX);
+            merged.derive(elem);
+            const uri = defaultNamespaceURI(doc);
+            if (uri && !userUnderscore &&
+                !merged.has(DEFAULT_PREFIX))
+                merged.set(DEFAULT_PREFIX, uri);
+        }
+        return merged.resolver();
     }
 
     // collate the registered match templates into a compiled

@@ -75,7 +75,7 @@ export class Template {
   #matchExpr = null;
 
   constructor ({ match = null, name = null, fn, priority = null,
-    mode = null }) {
+    mode = null, prefix = null }) {
     if (typeof fn !== 'function')
       throw new TypeError('template requires a function');
 
@@ -95,7 +95,7 @@ export class Template {
 
     if (match) {
       this.#matchExpr = match;
-      const compiled = compilePattern(match);
+      const compiled = compilePattern(match, { prefix });
       this.#patterns = compiled.branches;
       this.#rewrites = new Map(this.#patterns.map(b =>
         [b.evalExpr, b.expr]));

@@ -163,10 +163,13 @@ export class Context {
       }
       else if (n.nodeType === 1 || n.nodeType === 9) {
         // fallback: recurse into children, per the built-in
-        // element rule's shape
+        // element rule's shape. the recursion results are spread
+        // so an empty recursion yields NOTHING here — an empty
+        // array pushed as a single element would read as a
+        // non-empty spec downstream and defeat the drop semantics
         const ctx = new Context(this.registry, n,
           Object.assign({}, this.params, params), m);
-        results.push(ctx.applyTemplates());
+        results.push(...ctx.applyTemplates());
       }
       // non-elements with no template: dropped
     }

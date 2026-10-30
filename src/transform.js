@@ -205,8 +205,15 @@ export class Transform {
         // applyTemplates over document-valued select() results)
         if (node.nodeType !== 1) return ctx.applyTemplates();
 
-        // namespace-less elements cannot ride the #tag path (see
-        // #identityNoNS)
+        // namespace-less elements cannot ride the #tag path: a
+        // spec is evaluated against the insertion point, and
+        // markup-mixup has no spelling for a no-namespace element
+        // (binding xmlns='' sets ns[''] to a falsy string, which
+        // still takes the unbound-prefix branch — correct in an
+        // xml document, but in an HTML host document it yields
+        // the XHTML namespace). assemble such elements directly
+        // in the source document, then process the children
+        // through MARKUP
         if (!node.namespaceURI)
             return Transform.#identityNoNS(ctx);
 
@@ -231,12 +238,11 @@ export class Transform {
         return out;
     };
 
-    // namespace-less elements cannot ride the #tag path: markup-mixup
-    // resolves the empty prefix from the insertion point and falls
-    // back to the GLOBAL document.createElement when unbound, which
-    // relocates the element into the host document's XHTML
-    // namespace. assemble such elements directly in the source
-    // document, then process the children through MARKUP
+    // namespace-less element assembly for identity mode (see the
+    // #identityElement comment): create the element directly in
+    // the source document, then process the children through
+    // MARKUP under it as the parent (its doc governs, so
+    // namespace-less descendants land correctly too)
     static #identityNoNS = function (ctx) {
         const node = ctx.node;
         const el = ctx.doc.createElement(node.tagName);
@@ -255,15 +261,14 @@ export class Transform {
         return { '#comment': ctx.node.data };
     };
 
-    // the identity processing-instruction rule: preserve the PI.
-    // returns an actual ProcessingInstruction node rather than the
-    // #processing-instruction designator: markup-mixup flattens
-    // the designator's attribute map with a ': ' join, and an
-    // EMPTY attribute map flattens to '[object Object]', which
-    // would corrupt the PI data. a Node spec is cloned verbatim
+    // the identity processing-instruction rule: preserve the PI
+    // through markup-mixup's #processing-instruction designator
+    // ([target, data] shape). an empty attrs map flattens to ''
+    // since markup-mixup's flatten fix, so a bare [target, data]
+    // spec carries the data clean
     static #identityPI = function (ctx) {
-        return ctx.doc.createProcessingInstruction(
-            ctx.node.target, ctx.node.data);
+        return { '#processing-instruction':
+            [ctx.node.target, ctx.node.data] };
     };
 
     constructor (namespaces, { identity = false } = {}) {

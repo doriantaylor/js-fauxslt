@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<!-- fixture for the transform uniformity spec: the HTML leg. the
+     import map uses URL paths (import maps don't apply to script
+     src URLs, so the script tags need paths too) -->
+<html lang="en">
+  <head>
+    <title>FauXSLT lol</title>
+    <script type="importmap">{ "imports": { "markup-mixup": "/node_modules/markup-mixup/markup-mixup.js", "fauxslt": "/dist/fauxslt.js" } }</script>
+    <script type="module" src="/test/browser/transform-test.js"></script>
+  </head>
+  <body>
+    <p>sup doggs</p>
+  </body>
+</html>

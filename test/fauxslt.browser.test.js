@@ -773,3 +773,121 @@ test('a user named-PI template beats the built-in processing-instruction()', asy
   expect(out.otherDropped).toBe(true);
   expect(out.textKept).toBe(true);
 });
+
+// --- null-on-empty -----------------------------------------------------
+test('applyTemplates returns strict null on an empty node-set', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    let captured = {};
+    faux.registerMatch("p[@id='para']", function (ctx) {
+      // nothing in the document matches this select: null, not []
+      captured.empty = ctx.applyTemplates('.//section');
+      captured.strictNull = captured.empty === null;
+      // the || idiom fires inside a body
+      const fallback = ctx.applyTemplates('.//section') ||
+        { '#span': 'fallback fired' };
+      // and over the default (children) when there are none to net
+      const xml = new DOMParser().parseFromString(
+        '<w><r/></w>', 'application/xml');
+      const r = xml.querySelector('r');
+      const ctx2 = new window.fauxslt.Context(faux, r);
+      captured.childless = ctx2.applyTemplates();
+      return fallback;
+    });
+    faux.transform(document.getElementById('para'));
+    return { ...captured,
+      replaced: document.querySelector('main span')?.textContent };
+  });
+
+  expect(out.strictNull).toBe(true);
+  expect(out.childless).toBeNull();
+  // the || fallback produced the span in the output
+  expect(out.replaced).toBe('fallback fired');
+});
+
+// --- the `_` default-namespace convention -----------------------------
+test('bare-name patterns match in HTML natively, unrewritten', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    faux.registerMatch('li', function (ctx) {
+      return { '#li': 'x ' + ctx.node.textContent };
+    });
+    const li = document.querySelectorAll('#items li')[0];
+    const ts = faux.getMatchingTemplates(li);
+    // page.html has no default namespace: the pattern compiled
+    // UNREWRITTEN and matches the namespace-less li natively (the
+    // built-in * matches too, at lower priority)
+    const bare = ts.find(t => t.pattern === 'li');
+    return { matched: !!bare,
+      compiled: bare && bare.computedPattern,
+      expr: bare && bare.expressions[0] };
+  });
+  expect(out.matched).toBe(true);
+  expect(out.compiled).toBe('li');
+  expect(out.expr).toBe('li');
+});
+
+test('bare-name pattern matches a default-namespaced XHTML document via _:', async ({ page }) => {
+  // the same bare-name pattern, registered on an XML-parsed XHTML
+  // document: the root's xmlns means the pattern compiled as
+  // `_:body`-style rewrites and matches
+  await page.route('**/test/browser/xhtml-page.html', async route => {
+    const resp = await route.fetch();
+    const headers = resp.headers();
+    headers['content-type'] = 'application/xhtml+xml';
+    await route.fulfill({ response: resp, headers });
+  });
+  await page.goto('/test/browser/xhtml-page.html');
+  await page.addScriptTag({ type: 'module', url: '/test/browser/init.js' });
+  await page.waitForFunction('window.__ready === true');
+
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    let title = null;
+    faux.registerMatch('body', function (ctx) {
+      // unprefixed EXPRESSIONS match too: rewritten per evaluation
+      title = ctx.select('normalize-space(/html/head/title)');
+      return { '#main': 'claimed' };
+    });
+    const body = document.body;
+    const ts = faux.getMatchingTemplates(body);
+    const compiled = ts.length ? ts[0].computedPattern : null;
+    faux.transform(body);
+    return { matched: !!ts.length, compiled, title,
+      contentType: document.contentType };
+  });
+
+  expect(out.contentType).toBe('application/xhtml+xml');
+  expect(out.matched).toBe(true);
+  expect(out.compiled).toBe('_:body');
+  expect(out.title).toBe('xhtml test');
+});
+
+test('no-namespace XML: unprefixed pattern and select match natively', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const xml = new DOMParser().parseFromString(
+      '<w><r><p>alpha</p><p>beta</p></r></w>', 'application/xml');
+    const faux = new window.fauxslt.Transform();
+    let seen = [], count = null;
+    faux.registerMatch('p', function (ctx) {
+      seen.push(ctx.node.textContent);
+      count = ctx.select('count(//p)');
+      return { '#span': ctx.node.textContent };
+    });
+    const r = xml.querySelector('r');
+    const ts = faux.getMatchingTemplates(xml.querySelector('p'));
+    faux.transform(r);
+    return { compiled: ts[0].computedPattern, seen, count,
+      spans: xml.querySelectorAll('span').length };
+  });
+
+  // nothing rewritten: the pattern compiled as written and the
+  // unprefixed select netted the namespace-less elements
+  expect(out.compiled).toBe('p');
+  expect(out.seen).toEqual(['alpha', 'beta']);
+  expect(out.count).toBe(2);
+  expect(out.spans).toBe(2);
+});

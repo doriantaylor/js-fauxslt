@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<!-- fixture for the transform uniformity spec: the XHTML leg,
+     served as application/xhtml+xml by the spec so the browser
+     XML-parses it. note: Chromium does not execute module scripts
+     in XML documents (crbug.com/717643), so the inline script
+     below stays for manual/non-Chromium use; the spec injects the
+     import map and the module programmatically -->
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+  <head>
+    <title>FauXSLT lol</title>
+    <script type="importmap">{ "imports": { "markup-mixup": "/node_modules/markup-mixup/markup-mixup.js", "fauxslt": "/dist/fauxslt.js" } }</script>
+    <script type="module" src="/test/browser/transform-test.js"></script>
+  </head>
+  <body>
+    <p>sup doggs</p>
+  </body>
+</html>

@@ -164,6 +164,40 @@ no fallback to default-mode templates (per §5.4). The mode is chosen
 at `transform(node, params, mode)` and inherited through
 `applyTemplates` unless overridden.
 
+### Default Namespace
+
+XPath 1.0 has no default namespace, and the browser's XPath engine is
+never consulted for the empty prefix: an unprefixed name test matches
+only namespace-less elements. So when a document's root carries a
+default namespace (an unprefixed `xmlns="…"` — an XHTML page, an Atom
+feed, an SVG document), FauXSLT binds that namespace to the synthetic
+`_` prefix and rewrites every unprefixed element name test — in match
+patterns AND in `select()`/`test()` expressions — to `_:name`. The
+same pattern (`body`, `entry`, `circle`) then means the document's
+own unprefixed elements.
+
+Documents without a default namespace (HTML parsed as text/html,
+no-namespace XML) are not rewritten at all: unprefixed names match
+namespace-less elements natively.
+
+Escape hatches for mixed-namespace documents: an explicit prefix
+(`svg:circle`) matches whatever the prefix is bound to (bound through
+the `Transform` constructor's namespace map or an in-scope `xmlns:*`
+declaration), and `*:name` matches any namespace. A document that
+declares its own `xmlns:_` prefix wins: the synthetic rewrite is
+disabled there, and `_:foo` means what the document declared.
+
+One registration-time limitation: a template's pattern namespace is
+fixed when it is registered, against the ambient document (or an
+explicit namespace map). A template transforming nodes from a
+*different* document — one fetched via `ctx.document()`, with a
+different default namespace — needs prefixed patterns; expressions
+inside the template are rewritten per evaluation document and resolve
+correctly.
+
+The `html:` prefix remains a default binding (XHTML) for prefixed
+usage, but it is no longer special.
+
 ### Built-in Template Rules
 
 Every `Transform` installs the [XSLT 1.0 §5.8](https://www.w3.org/TR/xslt-10/#built-in-rule)
@@ -280,7 +314,10 @@ nothing removes its node outright.
 - **`test (expression)`** — truthiness of `select(expression)`.
 - **`applyTemplates (xpath?, params?, mode?)`** — apply templates to
   the nodes netted by the expression (default: the current node's
-  children). Returns an array of specs/nodes — itself a valid spec.
+  children). Returns an array of specs/nodes — itself a valid spec —
+  or **`null`** when nothing was netted, so
+  `ctx.applyTemplates(xpath) || fallback` is the supported fallback
+  idiom (`markup-mixup` absorbs `null` in every spec position).
 - **`callTemplate (name, params?)`** — invoke a named template with
   the current node as context.
 - **`copyOf (expression)`** — clone the nodes netted by the

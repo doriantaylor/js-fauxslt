@@ -234,7 +234,10 @@ export class Transform {
                 for (const a of cur.attributes)
                     if (a.name === 'xmlns' || a.prefix === 'xmlns')
                         if (!(a.name in out)) out[a.name] = a.value;
-        out['#tag'] = out['#tag'].concat(ctx.applyTemplates());
+        // the children ride the #tag array: null (nothing netted)
+        // must not reach the concat, hence the || []
+        out['#tag'] = out['#tag']
+          .concat(ctx.applyTemplates() || []);
         return out;
     };
 

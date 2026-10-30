@@ -129,9 +129,14 @@ export class Context {
   // apply templates to the nodes netted by the expression (default:
   // the current node's children). the mode is inherited from this
   // Context unless overridden by the third argument. returns an
-  // array of results — markup-mixup specs and/or DOM nodes — or an
-  // empty array. this is itself a valid spec, so DOM assembly stays
-  // in `Transform.transform`.
+  // array of results — markup-mixup specs and/or DOM nodes — or
+  // NULL when nothing was netted, so `applyTemplates(...) ||
+  // fallback` idioms work (null is falsy; an empty array would
+  // not be). this matches `copyOf` (null on empty) and
+  // `callTemplate` (null on missing). null is itself absorbed by
+  // markup-mixup in every spec position (a null entry is a
+  // no-op), and by transform()'s drop path, so DOM assembly
+  // stays in `Transform.transform`.
   applyTemplates (expression, params, mode) {
     let nodes = [];
     if (typeof expression === 'undefined' ||
@@ -173,14 +178,19 @@ export class Context {
         // element rule's shape. the recursion results are spread
         // so an empty recursion yields NOTHING here — an empty
         // array pushed as a single element would read as a
-        // non-empty spec downstream and defeat the drop semantics
+        // non-empty spec downstream and defeat the drop semantics.
+        // null-on-empty (the current contract) must not reach the
+        // spread at all, hence the guard
         const ctx = new Context(this.registry, n,
           Object.assign({}, this.params, params), m);
-        results.push(...ctx.applyTemplates());
+        const kids = ctx.applyTemplates();
+        if (kids) results.push(...kids);
       }
       // non-elements with no template: dropped
     }
-    return results;
+    // null — not [] — when nothing was netted: falsy, so the
+    // `applyTemplates(...) || fallback` idiom works
+    return results.length ? results : null;
   }
 
   // invoke a named template with the current node as context

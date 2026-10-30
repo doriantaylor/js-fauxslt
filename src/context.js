@@ -159,7 +159,14 @@ export class Context {
           Object.assign({}, this.params, params), m);
         const result = t.fn(ctx);
         if (result === null || typeof result === 'undefined') continue;
-        results.push(result);
+        // an array result is a list of specs: spread it, so an
+        // EMPTY array nets nothing (pushed whole it would read as
+        // one non-empty element downstream and defeat the drop
+        // semantics — e.g. the built-in * body over an element
+        // whose every child drops)
+        if (Array.isArray(result))
+          for (const r of result) results.push(r);
+        else results.push(result);
       }
       else if (n.nodeType === 1 || n.nodeType === 9) {
         // fallback: recurse into children, per the built-in

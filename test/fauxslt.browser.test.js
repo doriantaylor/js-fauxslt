@@ -697,3 +697,79 @@ test('non-default modes have no built-ins; fallback recurses and drops text', as
   // unclaimed text in a mode with no built-in text(): dropped
   expect(out.textDropped).toBe(true);
 });
+
+test('an element whose every child drops is itself dropped', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    // regression: a body returning an EMPTY array — exactly what
+    // the built-in * body returns over a sole comment/PI/childless
+    // element — must net nothing, not [[]]
+    const results = {};
+    for (const [label, inner] of [
+      ['sole comment', '<!-- c -->'],
+      ['sole PI', '<?pi data?>'],
+      ['childless element', ''],
+    ]) {
+      const xml = new DOMParser().parseFromString(
+        '<w><r>' + inner + '</r></w>', 'application/xml');
+      const r = xml.querySelector('r');
+      const w = r.parentNode;
+      const faux = new window.fauxslt.Transform();
+      faux.transform(r);
+      results[label] = w.childNodes.length === 0;
+    }
+
+    // a user body returning [] (an HTML li, where the bare-name
+    // pattern actually matches): the ul is replaced by nothing —
+    // every li nets [] and the spread yields no entries — so main
+    // holds only the paragraph
+    const faux = new window.fauxslt.Transform();
+    faux.registerMatch('li', function () { return []; });
+    const ul = document.getElementById('items');
+    const main = ul.parentNode;
+    faux.transform(ul);
+    results['user empty body'] =
+      main.querySelectorAll('li').length === 0 &&
+      main.querySelectorAll('ul').length === 0;
+    return results;
+  });
+
+  // every child netted nothing (comment/PI dropped, no children,
+  // or a user body returning []), so the element is gone — not
+  // left in place by an empty array smuggled through as a spec
+  for (const k of Object.keys(out)) expect(out[k]).toBe(true);
+});
+
+test('a user named-PI template beats the built-in processing-instruction()', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    // regression: named processing-instruction(Literal) carries
+    // §5.5 priority 0, beating the built-in bare NodeTest (−0.5).
+    // under the old −0.25 it tied and never fired
+    const xml = new DOMParser().parseFromString(
+      '<w><r><?tgt payload?>keep<?other x?></r></w>',
+      'application/xml');
+    const r = xml.querySelector('r');
+    const w = r.parentNode;
+
+    const faux = new window.fauxslt.Transform();
+    const seen = [];
+    faux.registerMatch("processing-instruction('tgt')",
+      function (ctx) {
+        seen.push(ctx.node.target);
+        return { '#span': 'pi:' + ctx.node.target };
+      });
+    faux.transform(r);
+
+    return { seen, span: !!w.querySelector('span'),
+      otherDropped: !Array.from(w.childNodes)
+        .some(n => n.nodeType === 7),
+      textKept: w.textContent.includes('keep') };
+  });
+
+  expect(out.seen).toEqual(['tgt']);
+  expect(out.span).toBe(true);
+  // the unclaimed PI dropped via the built-in
+  expect(out.otherDropped).toBe(true);
+  expect(out.textKept).toBe(true);
+});

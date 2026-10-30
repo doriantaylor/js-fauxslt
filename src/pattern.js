@@ -48,12 +48,15 @@ function isAbsolute (ast) {
 // with an ancestry predicate: a/b//c becomes
 //   c[ancestor-or-self::b/parent::a]
 // i.e. the last step stands alone and the inverse of the preceding
-// path becomes a predicate, so the pattern can be tested against any
-// node in one evaluation during the preemptive scan. the ancestry
-// predicate is PREPENDED to the last step's own predicates, per the
-// spec comment in template.js: order is immaterial for correctness
-// (all predicates constrain the same candidate set), but the
-// spec says prepend, so we prepend.
+// path becomes a predicate, so the pattern can be evaluated
+// against any node in one evaluation during the preemptive scan.
+// the ancestry predicate is APPENDED after the last step's own
+// predicates: order is NOT equivalent in general — for a
+// positional predicate like [2], prepending would count position
+// among the ancestry-passing candidates instead of among all the
+// parent's children matching the step, so c[anc][2] and c[2][anc]
+// net different nodes. appending keeps the step's own predicates
+// in their natural (§5.5) order.
 function rewriteBranch (branch) {
   if (branch.type !== 'path' || branch.from !== 'context')
     return branch;
@@ -92,7 +95,7 @@ function rewriteBranch (branch) {
     type: 'path', from: 'context',
     steps: [{
       type: 'step', axis: last.axis, test: last.test,
-      predicates: [pred].concat(last.predicates || []),
+      predicates: (last.predicates || []).concat([pred]),
     }],
   };
   return rewritten;
@@ -210,7 +213,9 @@ function computePriority (branch) {
     return 0.5;
   if (branch.type !== 'path') return 0;
   const steps = branch.steps || [];
-  if (!steps.length) return 0;
+  // the bare root pattern / falls to §5.5's final clause
+  // ("otherwise, +0.5")
+  if (!steps.length) return 0.5;
   const last = steps[steps.length - 1];
   if (last.type === 'self' || last.type === 'parent')
     return 0.5; // treated as node() wildcard-ish; §5.5 silent — we
@@ -220,7 +225,14 @@ function computePriority (branch) {
   if (last.predicates && last.predicates.length)
     return 0.5;
   if (t.kind === 'type') {
-    if (t.name === 'processing-instruction') return -0.25;
+    // per §5.5 verbatim: processing-instruction(Literal) carries
+    // priority 0 (an "otherwise"), the bare processing-instruction()
+    // NodeTest −0.5, and text()/comment()/node() likewise −0.5.
+    // the former matters against the built-in processing-
+    // instruction() rule (−0.5): a user named-PI template (0)
+    // must beat it
+    if (t.name === 'processing-instruction')
+      return t.literal ? 0 : -0.5;
     // text(), comment(), node()
     return -0.5;
   }

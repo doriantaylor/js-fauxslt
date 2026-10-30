@@ -173,10 +173,18 @@ templates in the default mode:
 | pattern | priority | behaviour |
 | --- | --- | --- |
 | `*` | −0.5 | recurse into children (attributes **not** copied) |
-| `/` | 0 | recurse into children (root nodes) |
+| `/` | +0.5 | recurse into children (root nodes) |
 | `text()` | −0.5 | copy the string value |
 | `comment()` | −0.5 | drop the node |
-| `processing-instruction()` | −0.25 | drop the node |
+| `processing-instruction()` | −0.5 | drop the node |
+
+Priorities follow §5.5, with one known divergence: multi-step and
+otherwise-qualified patterns compute from the LAST step only
+(`a/b` → 0, `p/*` → −0.5), where §5.5's final clause would give
+them +0.5. A user pattern that ties the built-in through this
+divergence (e.g. `ul/*` against the built-in `*`) loses to the
+first-registered rule — re-register the built-in's pattern
+(`*`, `/`, etc.) to override.
 
 Nothing about the built-ins is special: they are ordinary templates,
 and **re-registering the same pattern+mode overwrites the built-in**
@@ -186,7 +194,10 @@ user template (`li`, priority 0) always beats the built-in `*`
 (−0.5), and a differently-spelled wildcard-equivalent pattern
 (`node()`, `child::*`, priority −0.5) loses the tie to the built-in,
 because equal priorities resolve to the first-registered template —
-re-register `*` if you want to intercept everything.
+re-register `*` if you want to intercept everything. (Real XSLT
+gives built-ins the lowest import precedence, so user rules win
+ties there; FauXSLT's first-registered rule resolves in the
+opposite direction, which is why re-registration is the override.)
 
 Two deliberate divergences from §5.8:
 
@@ -199,9 +210,9 @@ Two deliberate divergences from §5.8:
 - **Document nodes are reachable only by absolute patterns.** The
   matching engine nets nodes from each visited element/document as
   context, so a document node is only ever netted by an absolute
-  pattern. The built-in `/` (priority 0) outranks lower-priority
-  absolute node tests such as `//node()` (−0.5) there — registering
-  `/` is the override.
+  pattern. The built-in `/` (+0.5) outranks lower-priority absolute
+  node tests such as `//node()` (−0.5) there — registering `/`
+  is the override.
 
 Note that `transform(documentNode)` is unsupported:
 `markup-mixup`'s replace requires the target to have a parent node.

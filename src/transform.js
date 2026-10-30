@@ -122,7 +122,7 @@
   special-cased structural dispatch: the built-ins ARE templates,
   so the same routing that selects them selects user templates.
   DocumentType nodes are never netted by any XPath node test, so
-  they fall to the no-children fallback and drop, uniformly.
+  they hit the non-element side of the fallback and drop, uniformly.
 
   Since the `Map` and `Set` interfaces are clunky, we should also
   surface some quasi-private methods like `getMatchingTemplates(node,
@@ -154,7 +154,6 @@ export class Transform {
     #collatedAbsolute;
     #expressions;
     #evaluator;
-    #identity;
 
     // built-in template bodies per XSLT 1.0 §5.8. these are plain
     // functions of a Context, just like user template bodies — the
@@ -206,6 +205,11 @@ export class Transform {
         // applyTemplates over document-valued select() results)
         if (node.nodeType !== 1) return ctx.applyTemplates();
 
+        // namespace-less elements cannot ride the #tag path (see
+        // #identityNoNS)
+        if (!node.namespaceURI)
+            return Transform.#identityNoNS(ctx);
+
         const out = { '#tag': [node.tagName] };
         // attributes (markup-mixup emits xmlns declarations first,
         // then the rest alphabetically)
@@ -225,6 +229,25 @@ export class Transform {
                         if (!(a.name in out)) out[a.name] = a.value;
         out['#tag'] = out['#tag'].concat(ctx.applyTemplates());
         return out;
+    };
+
+    // namespace-less elements cannot ride the #tag path: markup-mixup
+    // resolves the empty prefix from the insertion point and falls
+    // back to the GLOBAL document.createElement when unbound, which
+    // relocates the element into the host document's XHTML
+    // namespace. assemble such elements directly in the source
+    // document, then process the children through MARKUP
+    static #identityNoNS = function (ctx) {
+        const node = ctx.node;
+        const el = ctx.doc.createElement(node.tagName);
+        for (const a of node.attributes) {
+            if (a.prefix === 'xmlns' || a.name === 'xmlns')
+                el.setAttributeNS('http://www.w3.org/2000/xmlns/',
+                    a.name, a.value);
+            else el.setAttribute(a.name, a.value);
+        }
+        MARKUP({ parent: el, spec: ctx.applyTemplates(), args: [ctx] });
+        return el;
     };
 
     // the identity comment rule: preserve the comment
@@ -269,7 +292,6 @@ export class Transform {
         // registered wins. identity mode (§7.5) swaps the element
         // and root bodies for the shallow-copy form and preserves
         // comments and PIs.
-        this.#identity = identity;
         this.registerMatch('*', identity ?
             Transform.#identityElement : Transform.#builtinElement);
         this.registerMatch('/', identity ?
@@ -436,10 +458,12 @@ export class Transform {
     // evaluated from each node's parent and the match is recorded
     // against the netted node itself. this makes node-test patterns
     // (text(), comment(), processing-instruction()) and attribute
-    // patterns (@attr) genuinely matchable. each rewritten expression
-    // nets each node exactly once (at its parent), so the cost
-    // profile matches the earlier per-candidate scan. absolute and
-    // id() branches are tested once against the root.
+    // patterns (@attr) genuinely matchable. most rewritten
+    // expressions net each node exactly once (at its parent);
+    // branches left unrewritten (self/parent-tailed multi-step
+    // patterns) may net a node from several ancestors — the Set
+    // dedupes per node, so the cost is bounded, not the netting.
+    // absolute and id() branches are tested once against the root.
     #walk (root) {
         if (this.#nodeMatches.has(root))
             return this.#nodeMatches.get(root);

@@ -207,10 +207,17 @@ test('identity flag preserves namespace declarations in an XML document', async 
 
     // the replacement reproduces the subtree, namespaces intact
     const rt = w.querySelector('r');
+    const plain = rt && rt.querySelector('plain');
     return {
       kept: !!rt,
       nsAttr: rt && rt.querySelector('x\\:tag, tag') &&
         rt.querySelector('x\\:tag, tag').namespaceURI,
+      // regression: a namespace-LESS element must stay
+      // namespace-less through the identity copy (markup-mixup
+      // resolves the empty prefix from the insertion point and
+      // would otherwise relocate it into the host document's
+      // XHTML namespace)
+      plainNS: plain && plain.namespaceURI,
       attr: rt && rt.getAttribute('a'),
       text: rt && rt.textContent,
     };
@@ -220,6 +227,9 @@ test('identity flag preserves namespace declarations in an XML document', async 
   // namespace declarations, so the namespaced child keeps its URI
   expect(out.kept).toBe(true);
   expect(out.nsAttr).toBe('urn:fauxslt:x');
+  // the namespace-less element stayed namespace-less (null), not
+  // XHTML
+  expect(out.plainNS).toBeNull();
   expect(out.attr).toBe('1');
   expect(out.text).toContain('body');
   expect(out.text).toContain('text');

@@ -123,8 +123,10 @@ test('priority: predicate bumps to 0.5', prio('para[@class]', 0.5));
 test('priority: node() is -0.5', prio('node()', -0.5));
 test('priority: text() is -0.5', prio('text()', -0.5));
 test('priority: comment() is -0.5', prio('comment()', -0.5));
-test('priority: processing-instruction() is -0.25', prio('processing-instruction()', -0.25));
-test('priority: named processing-instruction is -0.25', prio("processing-instruction('x')", -0.25));
+test('priority: processing-instruction() is -0.5 per §5.5',
+  prio('processing-instruction()', -0.5));
+test('priority: named processing-instruction is 0 per §5.5',
+  prio("processing-instruction('x')", 0));
 test('priority: last step governs in multi-step', prio('chapter/para', 0));
 
 // --- union branch splitting -----------------------------------------
@@ -158,10 +160,11 @@ test('rewrite: single-step patterns pass through', () => {
 
 test('rewrite: predicates on the last step are preserved', () => {
   const c = compilePattern('a/b[@class="x"]');
-  // the ancestry predicate is PREPENDED, per the spec: own
-  // predicates follow it
+  // the ancestry predicate is APPENDED: the step's own predicates
+  // keep their natural (§5.5) order, which positional predicates
+  // require
   assert.equal(c.branches[0].evalExpr,
-    "html:b[parent::html:a][@class='x']");
+    "html:b[@class='x'][parent::html:a]");
 });
 
 test('rewrite: absolute patterns are not rewritten', () => {
@@ -187,6 +190,9 @@ test('compilePattern: / parses as the root pattern', () => {
   assert.equal(c.branches[0].absolute, true);
   assert.equal(c.absolute, true);
   assert.equal(c.branches[0].evalExpr, '/');
-  // §5.5 priority for a bare / is 0 (treated as an empty step list)
-  assert.equal(c.branches[0].priority, 0);
+  // §5.5's final clause: a pattern that isn't just a NodeTest
+  // carries priority +0.5. the built-in / outranks every user
+  // pattern that nets a document node except an explicit priority
+  // or a tie-won re-registration
+  assert.equal(c.branches[0].priority, 0.5);
 });

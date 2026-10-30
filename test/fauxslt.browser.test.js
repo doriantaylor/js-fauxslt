@@ -361,3 +361,47 @@ test('registerMatch accepts options and positional mode/priority/name', async ({
   expect(out.named).toBe(true);
   expect(out.namedPriority).toBe(2);
 });
+
+test('ctx.getAttributes returns the current node attribute map', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    let attrs = null;
+    faux.registerMatch('li[contains(@class, "hidden")]', function (ctx) {
+      attrs = ctx.getAttributes();
+      // spread the attribute map into a spec
+      return Object.assign({ '#li': ctx.node.textContent }, attrs);
+    });
+    faux.transform(document.querySelectorAll('#items li')[2]);
+    const li = document.querySelectorAll('#items li')[2];
+    return { attrs, replaced: li.getAttribute('class') };
+  });
+
+  expect(out.attrs).toEqual({ class: 'item hidden' });
+  expect(out.replaced).toBe('item hidden');
+});
+
+test('ctx.document fetches, parses, and caches external XML', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(async () => {
+    const faux = new window.fauxslt.Transform();
+    let doc1 = null, doc2 = null, cached = false;
+    faux.registerMatch("p[@id='para']", function (ctx) {
+      doc1 = ctx.document('/test/browser/fixture.xml');
+      doc2 = ctx.document('/test/browser/fixture.xml');
+      cached = doc1 === doc2;
+      return null;
+    });
+    faux.transform(document.getElementById('para'));
+    return {
+      cached,
+      root: doc1 && doc1.documentElement.tagName,
+      title: doc1 && doc1.querySelector('title') &&
+        doc1.querySelector('title').textContent,
+    };
+  });
+
+  expect(out.cached).toBe(true);
+  expect(out.root).toBe('fixture');
+  expect(out.title).toBe('a fixture document');
+});

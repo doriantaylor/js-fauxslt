@@ -191,4 +191,45 @@ export class Context {
     for (const n of nodes) frag.appendChild(n.cloneNode(true));
     return frag;
   }
+
+  // map of the current node's attributes: { name: value }. handy for
+  // spreading existing attributes into a markup-mixup spec
+  getAttributes () {
+    const out = {};
+    if (!this.node.attributes) return out;
+    for (const a of this.node.attributes) out[a.name] = a.value;
+    return out;
+  }
+
+  // fetch and parse an external XML document by URI, the analogue of
+  // XSLT's document(). synchronous by design (the template pipeline
+  // is synchronous; fetch offers no sync mode, so XMLHttpRequest in
+  // async:false mode is the only browser mechanism). documents are
+  // cached per Transform: one GET per URI per transform, per
+  // document() semantics.
+  document (uri) {
+    // resolve relative URIs against the current document
+    const abs = new URL(uri,
+      this.doc.baseURI || document.baseURI).href;
+    if (!this.registry.documents) this.registry.documents = new Map();
+    if (this.registry.documents.has(abs))
+      return this.registry.documents.get(abs);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', abs, false);
+    xhr.send(null);
+    if (xhr.status !== 200 && xhr.status !== 0)
+      throw new Error('document(): GET ' + abs +
+        ' failed with ' + xhr.status);
+
+    const parsed = new DOMParser().parseFromString(
+      xhr.responseText, 'application/xml');
+    // DOMParser reports parse errors as a document with a
+    // parsererror root, not an exception
+    if (parsed.getElementsByTagName('parsererror').length)
+      throw new Error('document(): ' + abs + ' is not well-formed XML');
+
+    this.registry.documents.set(abs, parsed);
+    return parsed;
+  }
 }

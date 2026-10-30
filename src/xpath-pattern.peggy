@@ -81,7 +81,9 @@ IdKeyPattern
 
 RelativePathPattern
   = first:StepPattern
-    rest:(_ sep:("/" / "//") _ s:StepPattern { return [sep, s]; })* {
+    // NB: "//" must be tried before "/": PEG choice is possessive,
+    // so with "/" first a/b//c would strand the second slash
+    rest:(_ sep:("//" / "/") _ s:StepPattern { return [sep, s]; })* {
       const steps = [first];
       for (const pair of rest) {
         const step = pair[1];

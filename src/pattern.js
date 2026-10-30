@@ -35,8 +35,70 @@ export class NotImplementedError extends Error {
   }
 }
 
+function isAbsolute (ast) {
+  // union patterns are per-branch
+  if (ast && ast.type === 'union')
+    return ast.branches.every(b => isAbsolute(b));
+  if (ast && ast.type === 'path') return ast.from === 'root';
+  // id()/key() patterns are inherently absolute per §5.2
+  return true;
+}
+
+// rewrite a relative multi-step pattern branch into single-step form
+// with an ancestry predicate: a/b//c becomes
+//   c[ancestor-or-self::b/parent::a]
+// i.e. the last step stands alone and the inverse of the preceding
+// path becomes a predicate, so the pattern can be tested against any
+// node in one boolean evaluation during the preemptive scan.
+function rewriteBranch (branch) {
+  if (branch.type !== 'path' || branch.from !== 'context')
+    return branch;
+  const steps = branch.steps || [];
+  if (steps.length <= 1) return branch;
+
+  // walk the preceding steps, building the inverse path predicate
+  const last = steps[steps.length - 1];
+  // self/parent steps in the tail complicate inversion; keep them
+  // verbatim until a use case demands more
+  if (last.type === 'self' || last.type === 'parent') return branch;
+
+  // build the inverse: for each preceding step (rightmost first) the
+  // axis is governed by the separator BETWEEN it and its successor:
+  // a step followed by a deep step (//) inverts to ancestor-or-self,
+  // otherwise parent. the deep marker lives on the FOLLOWING step.
+  const inverseSteps = [];
+  for (let i = steps.length - 2; i >= 0; i--) {
+    const s = steps[i];
+    if (s.type === 'self') { inverseSteps.push(s); continue; }
+    if (s.type === 'parent') { inverseSteps.push(s); continue; }
+    const next = steps[i + 1];
+    const axis = next && next.deep ? 'ancestor-or-self' : 'parent';
+    inverseSteps.push({
+      type: 'step', axis, test: s.test,
+      predicates: s.predicates || [],
+    });
+  }
+
+  // ancestor-or-self inverts the immediately preceding deep chain:
+  // for b//c the inverse is ancestor-or-self::b — rightmost-first
+  const pred = {
+    type: 'path', from: 'context', steps: inverseSteps,
+  };
+  const rewritten = {
+    type: 'path', from: 'context',
+    steps: [{
+      type: 'step', axis: last.axis, test: last.test,
+      predicates: (last.predicates || []).concat([pred]),
+    }],
+  };
+  return rewritten;
+}
+
 // compile a pattern: validate syntax, reject key(), rewrite unprefixed
-// element name tests to the XHTML prefix, return metadata
+// element name tests to the XHTML prefix, split unions, compute §5.5
+// priorities, and rewrite relative multi-step branches to single-step
+// form. returns metadata including per-branch { expr, priority,
+// evalExpr, absolute } entries.
 export function compilePattern (expr, opts = {}) {
   let ast = null;
   try {
@@ -61,11 +123,31 @@ export function compilePattern (expr, opts = {}) {
   // and unprefixed attribute tests match exactly that.
   rewriteNameTests(ast, prefix);
 
+  // split unions into elementary branches, compute §5.5 priorities,
+  // and rewrite multi-step relative branches into predicate form
+  const branches = (ast.type === 'union' ?
+    ast.branches : [ast]).map(b => {
+    // priority is computed on the ORIGINAL branch, per §5.5: the
+    // last step's own test and predicates — the ancestry predicate
+    // introduced by the rewrite must not inflate it
+    const priority = computePriority(b);
+    const rewritten = rewriteBranch(b);
+    return {
+      expr: serializePattern(rewritten),
+      evalExpr: serializePattern(rewritten),
+      priority,
+      absolute: isAbsolute(b),
+      ast: rewritten,
+    };
+  });
+
   return {
     expr,
     ast,
-    absolute: isAbsolute(ast),
-    // the expression actually handed to XPathEvaluator
+    branches,
+    absolute: branches.every(b => b.absolute),
+    // the expression actually handed to XPathEvaluator (whole
+    // pattern, for the legacy evaluation path)
     evalExpr: reserialize(ast, expr),
   };
 }
@@ -112,13 +194,50 @@ function findKeyNode (node) {
   return false;
 }
 
-function isAbsolute (ast) {
-  // union patterns are per-branch
-  if (ast && ast.type === 'union')
-    return ast.branches.every(b => isAbsolute(b));
-  if (ast && ast.type === 'path') return ast.from === 'root';
-  // id()/key() patterns are inherently absolute per §5.2
-  return true;
+// compute the default priority of an elementary (non-union) pattern
+// per XSLT 1.0 §5.5: the priority falls out of the LAST step's node
+// test and predicate count. explicit `priority` overrides this at
+// the Template level (getPriority), not here.
+function computePriority (branch) {
+  if (!branch) return 0;
+  // id()/key() carry an implicit +0.5 in most engines' practice;
+  // §5.5 is silent, so we treat them like any other pattern
+  if (branch.type === 'id' || branch.type === 'key')
+    return 0.5;
+  if (branch.type !== 'path') return 0;
+  const steps = branch.steps || [];
+  if (!steps.length) return 0;
+  const last = steps[steps.length - 1];
+  if (last.type === 'self' || last.type === 'parent')
+    return 0.5; // treated as node() wildcard-ish; §5.5 silent — we
+  // deliberately treat . and .. like a wildcard step
+  const t = last.test;
+  if (!t) return 0.5;
+  if (last.predicates && last.predicates.length)
+    return 0.5;
+  if (t.kind === 'type') {
+    if (t.name === 'processing-instruction') return -0.25;
+    // text(), comment(), node()
+    return -0.5;
+  }
+  if (t.kind === 'name') {
+    if (t.name === '*') return -0.5;
+    // namespace wildcard (svg:*) or any-namespace wildcard (*:para):
+    // both are partial wildcards, §5.5-analogous to -0.25
+    if (t.name.slice(-2) === ':*' || t.name.slice(0, 2) === '*:')
+      return -0.25;
+    return 0;
+  }
+  return 0.5;
+}
+
+// split a pattern AST into its elementary branches: unions are split
+// out; non-union patterns are singletons. each branch keeps its own
+// (eventually rewritten) evaluation expression and priority.
+export function elementaryBranches (ast) {
+  if (ast.type === 'union')
+    return ast.branches.map(b => ({ branch: b }));
+  return [{ branch: ast }];
 }
 
 // serialize a pattern AST back to an XPath expression string. the

@@ -107,3 +107,64 @@ test('leaves attribute names and wildcards alone', () => {
   assert.equal(compilePattern('li[contains(@class, "hidden")]').evalExpr,
     "html:li[contains(@class, 'hidden')]");
 });
+// --- §5.5 default priorities ---------------------------------------
+const prio = (expr, expected) => () => {
+  const c = compilePattern(expr);
+  assert.equal(c.branches.length, 1);
+  assert.equal(c.branches[0].priority, expected);
+};
+
+test('priority: bare name is 0', prio('para', 0));
+test('priority: namespaced name is 0', prio('svg:circle', 0));
+test('priority: wildcard is -0.5', prio('*', -0.5));
+test('priority: namespace wildcard svg:* is -0.25', prio('svg:*', -0.25));
+test('priority: any-namespace wildcard *:para is -0.25', prio('*:para', -0.25));
+test('priority: predicate bumps to 0.5', prio('para[@class]', 0.5));
+test('priority: node() is -0.5', prio('node()', -0.5));
+test('priority: text() is -0.5', prio('text()', -0.5));
+test('priority: comment() is -0.5', prio('comment()', -0.5));
+test('priority: processing-instruction() is -0.25', prio('processing-instruction()', -0.25));
+test('priority: named processing-instruction is -0.25', prio("processing-instruction('x')", -0.25));
+test('priority: last step governs in multi-step', prio('chapter/para', 0));
+
+// --- union branch splitting -----------------------------------------
+test('unions split into elementary branches with priorities', () => {
+  const c = compilePattern('para | * | svg:circle');
+  assert.equal(c.branches.length, 3);
+  assert.equal(c.branches[0].priority, 0);
+  assert.equal(c.branches[1].priority, -0.5);
+  assert.equal(c.branches[2].priority, 0);
+  // each branch serializes to its own single-step expression
+  assert.equal(c.branches[0].expr, 'html:para');
+});
+
+// --- multi-step rewrite to default (child) axis ---------------------
+test('rewrite: a/b becomes b[parent::a]', () => {
+  const c = compilePattern('a/b');
+  assert.equal(c.branches[0].evalExpr, 'html:b[parent::html:a]');
+});
+
+test('rewrite: a/b//c becomes c[ancestor-or-self::b/parent::a]', () => {
+  const c = compilePattern('a/b//c');
+  assert.equal(
+    c.branches[0].evalExpr,
+    'html:c[ancestor-or-self::html:b/parent::html:a]');
+});
+
+test('rewrite: single-step patterns pass through', () => {
+  const c = compilePattern('para');
+  assert.equal(c.branches[0].evalExpr, 'html:para');
+});
+
+test('rewrite: predicates on the last step are preserved', () => {
+  const c = compilePattern('a/b[@class="x"]');
+  assert.equal(c.branches[0].evalExpr,
+    "html:b[@class='x'][parent::html:a]");
+});
+
+test('rewrite: absolute patterns are not rewritten', () => {
+  const c = compilePattern('/doc/para');
+  assert.ok(c.branches[0].absolute);
+  // no ancestry predicate; only the xhtml prefix rewrite applies
+  assert.equal(c.branches[0].evalExpr, '/html:doc/html:para');
+});

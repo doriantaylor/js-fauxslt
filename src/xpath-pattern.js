@@ -917,20 +917,20 @@ function peg$parse(input, options) {
       for (;;) {
         s3 = peg$currPos;
         s4 = peg$parse_();
-        if (input.charCodeAt(peg$currPos) === 47) {
-          s5 = peg$c2;
-          peg$currPos++;
+        if (input.substr(peg$currPos, 2) === peg$c1) {
+          s5 = peg$c1;
+          peg$currPos += 2;
         } else {
           s5 = peg$FAILED;
-          if (peg$silentFails === 0) { peg$fail(peg$e3); }
+          if (peg$silentFails === 0) { peg$fail(peg$e2); }
         }
         if (s5 === peg$FAILED) {
-          if (input.substr(peg$currPos, 2) === peg$c1) {
-            s5 = peg$c1;
-            peg$currPos += 2;
+          if (input.charCodeAt(peg$currPos) === 47) {
+            s5 = peg$c2;
+            peg$currPos++;
           } else {
             s5 = peg$FAILED;
-            if (peg$silentFails === 0) { peg$fail(peg$e2); }
+            if (peg$silentFails === 0) { peg$fail(peg$e3); }
           }
         }
         if (s5 !== peg$FAILED) {

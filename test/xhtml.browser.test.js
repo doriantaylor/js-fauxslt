@@ -10,6 +10,9 @@
 
 import { test, expect } from '@playwright/test';
 
+const fetchText = async (page, url) =>
+  page.evaluate(async (u) => (await (await fetch(u)).text()), url);
+
 test('patterns match and transform in XHTML (XML-parsed) documents', async ({ page }) => {
   // serve the xhtml fixture as application/xhtml+xml so the browser
   // XML-parses it
@@ -80,4 +83,144 @@ test('HTML and XHTML transforms agree via the same pattern', async ({ page }) =>
 
   expect(htmlOut).toBe('same: some text');
   expect(xhtmlOut).toBe('same: some text');
+});
+
+test('identity flag round-trips a subtree (XML fixture)', async ({ page }) => {
+  await page.goto('/test/browser/page.html');
+  await page.waitForFunction('window.__ready === true');
+
+  // fetch the fixture text once so the comparison baseline is the
+  // raw source, then transform a parsed copy with the identity flag
+  const source = await fetchText(page, '/test/browser/identity.xml');
+  const out = await page.evaluate((src) => {
+    const xml = new DOMParser().parseFromString(
+      src, 'application/xml');
+    // sanity: the PI really exists in the source
+    const srcPI = Array.from(xml.documentElement.childNodes)
+      .some(n => n.nodeType === 7);
+
+    const faux = new window.fauxslt.Transform(null, {
+      identity: true });
+    // transform() needs a node whose parent is an element, so
+    // clone the document element into a wrapper and transform the
+    // clone: the round trip then covers the entire fixture subtree
+    const doc = xml;
+    const rootEl = doc.documentElement;
+    const wrap = doc.createElement('wrap');
+    const clone = rootEl.cloneNode(true);
+    wrap.appendChild(clone);
+    doc.replaceChild(wrap, rootEl);
+
+    const before = new XMLSerializer()
+      .serializeToString(clone);
+
+    faux.transform(clone);
+
+    const after = new XMLSerializer()
+      .serializeToString(wrap.firstChild);
+
+    // normalize both serializations for comparison: strip
+    // insignificant whitespace between tags and sort each
+    // element's attributes. xmlns declarations are EXCLUDED: the
+    // identity copy re-states inherited declarations on every
+    // element (a documented divergence — markup-mixup binds
+    // prefixes from the insertion point, so the source's in-scope
+    // bindings are re-stated explicitly), so raw xmlns presence is
+    // not stable across the round trip; the namespace URIs
+    // themselves survive, which the normalize() below verifies
+    // through element nodeName. runs in the browser (DOMParser
+    // lives there)
+    const normalize = (xmlText) => {
+      const d = new DOMParser().parseFromString(
+        xmlText, 'application/xml');
+      const walk = (node, out) => {
+        for (const n of node.childNodes) {
+          if (n.nodeType === 1) {
+            out.push('<' + n.nodeName);
+            const attrs = Array.from(n.attributes || [])
+              .filter(a => a.name !== 'xmlns' &&
+                a.prefix !== 'xmlns')
+              .map(a => [a.name, a.value])
+              .sort(([a], [b]) => a.localeCompare(b));
+            for (const [name, value] of attrs)
+              out.push(' ' + name + '="' + value + '"');
+            out.push('>');
+            walk(n, out);
+            out.push('</' + n.nodeName + '>');
+          }
+          else if (n.nodeType === 3) {
+            const t = n.data.trim();
+            if (t) out.push(t);
+          }
+          else if (n.nodeType === 7)
+            out.push('<?' + n.target + ' ' + n.data + '?>');
+          else if (n.nodeType === 8)
+            out.push('<!--' + n.data + '-->');
+        }
+      };
+      const out = [];
+      if (d.documentElement) walk(d.documentElement, out);
+      return out.join('');
+    };
+
+    // also verify the namespaced element kept its URI: nodeName
+    // comparison covers the prefix, and the serialized round trip
+    // carries the namespace through to the parsed document
+    const afterDoc = new DOMParser().parseFromString(
+      new XMLSerializer().serializeToString(wrap.firstChild),
+      'application/xml');
+    const nsNote = afterDoc.getElementsByTagName('x:note')[0];
+
+    return { srcPI, before: normalize(before),
+      after: normalize(after),
+      nsPreserved: nsNote &&
+        nsNote.namespaceURI === 'urn:fauxslt:x' };
+  }, source);
+
+  // the fixture really carried a PI (guards the vacuous case)
+  expect(out.srcPI).toBe(true);
+
+  // the round trip must reproduce the subtree: elements with
+  // attributes, nested elements, mixed text, comment, and PI —
+  // normalized for whitespace, attribute order, and xmlns
+  // re-statement (inherited declarations are re-stated on every
+  // element; the URIs themselves survive)
+  expect(out.after).toBe(out.before);
+  // the namespaced element kept its URI through the round trip
+  expect(out.nsPreserved).toBe(true);
+});
+
+test('identity flag preserves namespace declarations in an XML document', async ({ page }) => {
+  await page.goto('/test/browser/page.html');
+  await page.waitForFunction('window.__ready === true');
+
+  const out = await page.evaluate(() => {
+    const xml = new DOMParser().parseFromString(
+      '<w xmlns:x="urn:fauxslt:x"><r a="1"><x:tag>body</x:tag>' +
+      '<plain>text</plain></r></w>', 'application/xml');
+    const r = xml.querySelector('r');
+    const w = r.parentNode;
+
+    const faux = new window.fauxslt.Transform(null, {
+      identity: true });
+    faux.transform(r);
+
+    // the replacement reproduces the subtree, namespaces intact
+    const rt = w.querySelector('r');
+    return {
+      kept: !!rt,
+      nsAttr: rt && rt.querySelector('x\\:tag, tag') &&
+        rt.querySelector('x\\:tag, tag').namespaceURI,
+      attr: rt && rt.getAttribute('a'),
+      text: rt && rt.textContent,
+    };
+  });
+
+  // the identity shallow copy re-creates the element with its
+  // namespace declarations, so the namespaced child keeps its URI
+  expect(out.kept).toBe(true);
+  expect(out.nsAttr).toBe('urn:fauxslt:x');
+  expect(out.attr).toBe('1');
+  expect(out.text).toContain('body');
+  expect(out.text).toContain('text');
 });

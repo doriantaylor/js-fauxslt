@@ -200,21 +200,29 @@ export class Transform {
     // of the default bodies.
     static #identityElement = function (ctx) {
         const node = ctx.node;
-        const out = { '#tag': [
-            node.nodeType === 1 ? node.tagName :
-                node.nodeName ] };
-        // attributes, spread into the spec (markup-mixup emits
-        // xmlns declarations first, then the rest alphabetically)
+
+        // documents and fragments have no name to copy: their
+        // children stand alone (the / rule is reachable through
+        // applyTemplates over document-valued select() results)
+        if (node.nodeType !== 1) return ctx.applyTemplates();
+
+        const out = { '#tag': [node.tagName] };
+        // attributes (markup-mixup emits xmlns declarations first,
+        // then the rest alphabetically)
         const attrs = ctx.getAttributes();
         for (const k of Object.keys(attrs)) out[k] = attrs[k];
-        // namespace declarations: copy the node's own declarations
-        // so prefixes survive the round trip (markup-mixup re-states
-        // inherited ones from the insertion point anyway)
-        if (node.attributes)
-            for (const a of node.attributes)
-                if (a.prefix === 'xmlns' ||
-                    (a.name === 'xmlns' && !a.prefix))
-                    out[a.name] = a.value;
+        // namespace declarations: markup-mixup binds prefixes from
+        // the INSERTION point upward (gatherNS), not from the
+        // source tree, so the source's in-scope declarations must
+        // be re-stated explicitly or prefixed descendants lose
+        // their bindings. nearest declaration wins, per XML
+        // scoping
+        for (let cur = node; cur && cur.nodeType === 1;
+            cur = cur.parentNode)
+            if (cur.attributes)
+                for (const a of cur.attributes)
+                    if (a.name === 'xmlns' || a.prefix === 'xmlns')
+                        if (!(a.name in out)) out[a.name] = a.value;
         out['#tag'] = out['#tag'].concat(ctx.applyTemplates());
         return out;
     };
@@ -224,10 +232,15 @@ export class Transform {
         return { '#comment': ctx.node.data };
     };
 
-    // the identity processing-instruction rule: preserve the PI
+    // the identity processing-instruction rule: preserve the PI.
+    // returns an actual ProcessingInstruction node rather than the
+    // #processing-instruction designator: markup-mixup flattens
+    // the designator's attribute map with a ': ' join, and an
+    // EMPTY attribute map flattens to '[object Object]', which
+    // would corrupt the PI data. a Node spec is cloned verbatim
     static #identityPI = function (ctx) {
-        return { '#processing-instruction':
-            [ctx.node.target, ctx.node.data] };
+        return ctx.doc.createProcessingInstruction(
+            ctx.node.target, ctx.node.data);
     };
 
     constructor (namespaces, { identity = false } = {}) {
@@ -506,11 +519,23 @@ export class Transform {
     // node with the result. all DOM assembly happens here, via MARKUP.
     // the node-match index is per document state: transforms mutate
     // the DOM, so it is dropped and rebuilt lazily on each call.
+    // a result that nets nothing DROPS the node (XSLT semantics:
+    // a template body producing no output removes the node) —
+    // MARKUP alone would leave the original in place, since it
+    // bails on empty specs.
     transform (node, params, mode = null) {
         this.#nodeMatches = new WeakMap();
 
         const ctx  = new Context(this, node, params, mode);
         const spec = ctx.applyTemplates('self::node()', null, mode);
+
+        // nothing netted: remove the node outright. this is the
+        // drop path for e.g. the built-in comment() and
+        // processing-instruction() rules routed at the top level
+        if (!Array.isArray(spec) || !spec.length) {
+            if (node.parentNode) node.parentNode.removeChild(node);
+            return null;
+        }
 
         // args carries the Context so nested spec callbacks receive it
         // (as `this` for plain functions, as the first argument

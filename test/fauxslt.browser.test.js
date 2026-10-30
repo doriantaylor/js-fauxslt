@@ -26,6 +26,11 @@ test('Transform instantiates and registers templates', async ({ page }) => {
   const out = await page.evaluate(() => {
     const faux = new window.fauxslt.Transform();
 
+    // the §5.8 built-ins are present in the registry before any
+    // user registration, as ordinary templates in the default mode
+    const builtin = ['*', '/', 'text()', 'comment()',
+      'processing-instruction()'];
+
     // registering must return something chainable (or undefined —
     // the contract doesn't promise a return; it must not throw)
     faux.registerMatch('li', function (ctx) {
@@ -38,10 +43,14 @@ test('Transform instantiates and registers templates', async ({ page }) => {
     return {
       templates: faux.templates.size,
       hasNamed: faux.templates instanceof Map,
+      builtins: builtin.map(p =>
+        faux.templates.has(p) && faux.templates.get(p).has(null)),
     };
   });
   expect(out.templates).toBeGreaterThan(0);
   expect(out.hasNamed).toBe(true);
+  // every built-in present in the default mode before user code
+  for (const b of out.builtins) expect(b).toBe(true);
 });
 
 test('transform replaces the matched node with the template result', async ({ page }) => {
@@ -62,7 +71,7 @@ test('transform replaces the matched node with the template result', async ({ pa
   await expect(page.locator('#para')).toHaveText(/^transformed: some text$/);
 });
 
-test('most specific match wins: fewer nodes selected, ties to newest', async ({ page }) => {
+test('most specific match wins: predicated over bare, built-ins never', async ({ page }) => {
   await go(page);
   await page.evaluate(() => {
     const faux = new window.fauxslt.Transform();
@@ -85,7 +94,8 @@ test('most specific match wins: fewer nodes selected, ties to newest', async ({ 
   expect(txt).toMatch(/^hidden third$/);
 
   // and the generic one for the others. positional indexing again:
-  // the replacement li carries no class, so class selectors drift
+  // the replacement li carries no class, so class selectors drift.
+  // the built-in * (priority −0.5) never beats either user template
   const first = await page.evaluate(() => {
     window.faux2.transform(document.querySelectorAll('#items li')[0]);
     return document.querySelectorAll('#items li')[0].textContent;
@@ -299,12 +309,15 @@ test('modes partition templates: strict matching, inheritance, override', async 
     // toc mode: only the toc template applies (strict: no fallback)
     faux.transform(document.querySelectorAll('#items li')[1], null, 'toc');
 
-    // a node with no template in a mode passes through untouched
-    // (deep copy), per the built-in rule
-    const untouched = (() => {
+    // a node with no template in a mode recurses into children per
+    // the no-match fallback (claimed descendants fire; unclaimed
+    // text drops). the para has no element children: after the
+    // fallback recurses into its text and drops it, the para is
+    // gone entirely (empty result = drop)
+    const paraGone = (() => {
       const p = document.getElementById('para');
       faux.transform(p, null, 'toc');
-      return document.getElementById('para') !== null;
+      return document.getElementById('para') === null;
     })();
 
     // mode override through applyTemplates: the ul template is
@@ -325,13 +338,14 @@ test('modes partition templates: strict matching, inheritance, override', async 
     }, 'toc');
     inner.transform(document.getElementById('items'), null, 'toc');
 
-    return { seen, untouched, innerSeen };
+    return { seen, paraGone, innerSeen };
   });
 
   // transform() mode reaches the matched template
   expect(out.seen).toEqual(['default:null', 'toc:toc']);
-  // no match in mode → pass-through, not fallback
-  expect(out.untouched).toBe(true);
+  // no match in mode → the fallback recurses and drops; with no
+  // claimable children the para vanishes entirely (empty = drop)
+  expect(out.paraGone).toBe(true);
   // applyTemplates inherits the active mode
   expect(out.innerSeen).toEqual(['toc', 'toc', 'toc']);
 });
@@ -404,4 +418,282 @@ test('ctx.document fetches, parses, and caches external XML', async ({ page }) =
   expect(out.cached).toBe(true);
   expect(out.root).toBe('fixture');
   expect(out.title).toBe('a fixture document');
+});
+
+test('built-in element rule recurses into children; attributes drop', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    // transform the ul: unclaimed by any user template, so the
+    // built-in * fires — recursion into children, not deep copy.
+    // the ul's attributes (id, class) drop per §5.8, and the li
+    // children — also unclaimed — recurse down to their text,
+    // which the built-in text rule copies. the ul is replaced by
+    // bare text (its grandchildren content)
+    const ul = document.getElementById('items');
+    const parent = ul.parentNode;
+    faux.transform(ul);
+    return {
+      // the ul itself is gone: replaced by its processed children
+      ulGone: !document.getElementById('items'),
+      // no li elements survive the §5.8 recursion (each li was
+      // itself replaced by its copied text)
+      lis: parent.querySelectorAll('li').length,
+      // the text content came through
+      text: parent.textContent,
+    };
+  });
+  // the ul is replaced by its children (no template claimed it)
+  expect(out.ulGone).toBe(true);
+  // each unclaimed li likewise collapsed to its copied text
+  expect(out.lis).toBe(0);
+  expect(out.text).toContain('first');
+  expect(out.text).toContain('second');
+  expect(out.text).toContain('third');
+});
+
+test('text is copied and comments dropped by the built-ins; user text() overrides', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    // XML-parsed fixture so comments survive; wrapped in an outer
+    // element because transforming a node whose parent is the
+    // document is unsupported (markup-mixup's replace needs an
+    // element parent for text results)
+    const xml = new DOMParser().parseFromString(
+      '<w><r><p>alpha</p><!-- a comment --><p>beta</p></r></w>',
+      'application/xml');
+    const r = xml.querySelector('r');
+    const w = r.parentNode;
+
+    const faux = new window.fauxslt.Transform();
+    // r is unclaimed: built-in * recurses; p elements likewise;
+    // text copied; comment dropped
+    faux.transform(r);
+    const after = Array.from(w.childNodes)
+      .map(n => n.nodeType === 8 ? 'comment:' + n.data :
+        n.nodeType === 3 ? n.data : 'other:' + n.nodeType);
+
+    // user override: re-registering text() replaces the built-in
+    const faux2 = new window.fauxslt.Transform();
+    const seen = [];
+    faux2.registerMatch('text()', function (ctx) {
+      seen.push(ctx.node.data);
+      return ctx.node.data.toUpperCase();
+    });
+    const xml2 = new DOMParser().parseFromString(
+      '<w><r>alpha<b>beta</b>gamma</r></w>', 'application/xml');
+    const r2 = xml2.querySelector('r');
+    const w2 = r2.parentNode;
+    faux2.transform(r2);
+    const out2 = Array.from(w2.childNodes)
+      .map(n => n.nodeType === 3 ? n.data : n.textContent);
+
+    return { after, seen, out2 };
+  });
+
+  // built-in text rule copied the strings; the built-in comment
+  // rule dropped the comment
+  expect(out.after).toEqual(['alpha', 'beta']);
+  // the user text() override fired on every text node — including
+  // the one inside <b>, which the built-in * rule recursed into
+  expect(out.seen.sort()).toEqual(['alpha', 'beta', 'gamma']);
+  expect(out.out2).toEqual(['ALPHA', 'BETA', 'GAMMA']);
+});
+
+test('processing-instructions are dropped in default mode (XML fixture)', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    // PIs only exist in XML-parsed documents: HTML parsing destroys
+    // them, so an HTML-fixture assertion would be vacuous
+    const xml = new DOMParser().parseFromString(
+      '<?xml-stylesheet type="text/xsl" href="x"?><w><r><p>keep</p>' +
+      '<?ping data?>text</r></w>', 'application/xml');
+    // assert the PI exists in the source before transforming (PIs
+    // are not elements; scan the child nodes)
+    const r = xml.querySelector('r');
+    const srcPI = Array.from(r.childNodes)
+      .some(n => n.nodeType === 7);
+    const w = r.parentNode;
+
+    const faux = new window.fauxslt.Transform();
+    // r is unclaimed: built-in * recurses; the child PI hits the
+    // built-in processing-instruction() rule and drops. the p
+    // element is also unclaimed: it collapses to its copied text
+    faux.transform(r);
+    const piGone = !Array.from(w.childNodes)
+      .some(n => n.nodeType === 7);
+    // no p element survives the recursion, but its text does
+    const textContent = Array.from(w.childNodes)
+      .filter(n => n.nodeType === 3).map(n => n.data);
+
+    return { srcPI, piGone, textContent };
+  });
+
+  // the source really had a PI (guards the vacuous case)
+  expect(out.srcPI).toBe(true);
+  // the built-in processing-instruction rule dropped it
+  expect(out.piGone).toBe(true);
+  // the p's text survived; the PI's did not
+  expect(out.textContent).toEqual(['keep', 'text']);
+});
+
+test('user templates beat built-ins by §5.5 priority; * overwrites the built-in', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    // bare-name user template (priority 0) beats the built-in *
+    // (−0.5) on li nodes
+    faux.registerMatch('li', function (ctx) {
+      return { '#li': 'user ' + ctx.node.textContent };
+    });
+    faux.transform(document.querySelectorAll('#items li')[0]);
+    const userWon = document.querySelectorAll('#items li')[0]
+      .textContent === 'user first';
+
+    // re-registering * replaces the built-in (same pattern+mode
+    // overwrite): attributes now preserved and no recursion
+    const faux2 = new window.fauxslt.Transform();
+    faux2.registerMatch('*', function (ctx) {
+      return Object.assign({ '#li': ctx.node.textContent },
+        ctx.getAttributes());
+    });
+    faux2.transform(document.querySelectorAll('#items li')[1]);
+    const li = document.querySelectorAll('#items li')[1];
+    const overwritten = li.tagName === 'LI' &&
+      li.getAttribute('class') === 'item' &&
+      li.textContent === 'second';
+
+    // wildcard-equivalent node() (−0.5) does NOT beat the built-in *
+    // (−0.5, first-registered): the built-in still fires, so the li
+    // collapses to its text with attributes dropped
+    const faux3 = new window.fauxslt.Transform();
+    faux3.registerMatch('node()', function (ctx) {
+      return { '#span': 'node() fired' };
+    });
+    const third = document.querySelectorAll('#items li')[2];
+    const p3 = third.parentNode;
+    faux3.transform(third);
+    const nodeLost = !p3.querySelector('span') &&
+      p3.textContent.includes('third');
+
+    return { userWon, overwritten, nodeLost };
+  });
+
+  expect(out.userWon).toBe(true);
+  expect(out.overwritten).toBe(true);
+  expect(out.nodeLost).toBe(true);
+});
+
+test('positional predicates match: li[2] nets only the second li', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    const seen = [];
+    // second: li[2] (and only li[2]) gets marked; everything else
+    // falls through to the built-ins
+    faux.registerMatch('li[2]', function (ctx) {
+      seen.push(ctx.node.textContent);
+      return { '#li': 'marked ' + ctx.node.textContent };
+    });
+    // transform the ul ONCE: the engine nets every li through the
+    // parent-as-context scan, so li[2] matches only the second li
+    const ul = document.getElementById('items');
+    const parent = ul.parentNode;
+    faux.transform(ul);
+    return { seen,
+      marked: parent.querySelectorAll('li').length === 1 &&
+        parent.querySelector('li').textContent };
+  });
+  // pins the latent positional-predicate fix: under the old
+  // boolean scan li[2] never matched; under parent-as-context it
+  // nets the second li child of each parent
+  expect(out.seen).toEqual(['second']);
+  expect(out.marked).toBe('marked second');
+});
+
+test('predicated node tests evaluate: text()[normalize-space(.)]', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    const seen = [];
+    faux.registerMatch(
+      "text()[normalize-space(.)='alpha']",
+      function (ctx) {
+        seen.push(ctx.node.data);
+        return null;
+      });
+    // wrapped: transform() replaces the node, which needs an
+    // element parent for text results
+    const xml = new DOMParser().parseFromString(
+      '<w><r><p>alpha</p><p>beta</p></r></w>', 'application/xml');
+    const r = xml.querySelector('r');
+    const w = r.parentNode;
+    try {
+      // r is unclaimed: built-in * recurses into p, then text;
+      // the predicated text() template claims the matching node
+      faux.transform(r);
+      return { threw: false, seen,
+        alphaGone: !w.textContent.includes('alpha'),
+        betaKept: w.textContent.includes('beta') };
+    }
+    catch (e) {
+      // a registration-time probe is not implemented; if Chromium
+      // refuses the predicate-internal context, it throws loudly
+      // at first evaluation — the documented restriction
+      return { threw: true, name: e.name, msg: String(e.message) };
+    }
+  });
+
+  // the predicated node test works natively (predicate-internal
+  // contexts are distinct from the top-level contextNode
+  // restriction); if it ever throws, this test surfaces the
+  // documented restriction instead of failing silently
+  expect(out.threw).toBe(false);
+  expect(out.seen).toEqual(['alpha']);
+  // the claimed text node dropped (template returned null);
+  // beta survived via the built-in text rule
+  expect(out.alphaGone).toBe(true);
+  expect(out.betaKept).toBe(true);
+});
+
+test('non-default modes have no built-ins; fallback recurses and drops text', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    const seen = [];
+    // a toc-mode template on the li descendants of an
+    // otherwise-unclaimed element
+    faux.registerMatch('li', function (ctx) {
+      seen.push(ctx.node.textContent);
+      return { '#li': 't ' + ctx.node.textContent };
+    }, 'toc');
+
+    // transform the ul in toc mode: no toc-mode template for ul, so
+    // the fallback recurses into children; the li fires inside it
+    const ul = document.getElementById('items');
+    const parent = ul.parentNode;
+    faux.transform(ul, null, 'toc');
+    const lis = parent.querySelectorAll('li');
+
+    // unclaimed text in a mode with no built-in text(): dropped.
+    // wrapped: transform() replaces the node, which needs an
+    // element parent
+    const xml = new DOMParser().parseFromString(
+      '<w><r>only text</r></w>', 'application/xml');
+    const r = xml.querySelector('r');
+    const w = r.parentNode;
+    const faux2 = new window.fauxslt.Transform();
+    faux2.transform(r, null, 'toc');
+    const textDropped = w.childNodes.length === 0;
+
+    return { seen, lis: lis.length,
+      liText: lis[0] && lis[0].textContent, textDropped };
+  });
+
+  // the claimed descendants fired through the fallback recursion
+  expect(out.seen).toEqual(['first', 'second', 'third']);
+  expect(out.lis).toBe(3);
+  expect(out.liText).toBe('t first');
+  // unclaimed text in a mode with no built-in text(): dropped
+  expect(out.textDropped).toBe(true);
 });

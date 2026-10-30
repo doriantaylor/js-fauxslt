@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- identity round-trip fixture: elements, attributes, nested
+     elements, mixed text, one comment, one PI, and namespace
+     declarations. deliberately excluding CDATA sections and
+     prefixed (non-xmlns) attributes — known limitations of the
+     identity copy. attribute order matches markup-mixup's emission
+     order (xmlns first, then alphabetical) so the raw serialization
+     can be compared without normalization. -->
+<document xmlns="urn:fauxslt:doc" xmlns:x="urn:fauxslt:x" version="1.0">
+  <?instruction-process flag="on"?>processing text<!-- a comment -->
+  <section xml:lang="en" class="intro">
+    <title>Hello</title>
+    <para>Mixed <em>emphasis</em> content.</para>
+    <x:note priority="low">Namespaced element body.</x:note>
+  </section>
+</document>

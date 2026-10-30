@@ -104,10 +104,14 @@
   `/` are registered SEPARATELY because `Template.getPriority()`
   takes the max across branches: a `*|/` union would compute
   priority 0 and beat bare-name user templates (priority 0) on
-  ties (first-registered wins). This constructor-only,
-  default-mode-only installation deliberately diverges from §5.8's
-  every-mode rule: a node transformed in a non-default mode with no
-  matching template hits the fallback below rather than a built-in.
+  ties (first-registered wins). With the `{ identity: true }`
+  constructor option (§7.5), the `*`/`/` bodies become the
+  shallow-copy form (`#tag` with the qualified name, attributes,
+  and namespace declarations) and comment/PI are preserved. This
+  constructor-only, default-mode-only installation deliberately
+  diverges from §5.8's every-mode rule: a node transformed in a
+  non-default mode with no matching template hits the fallback
+  below rather than a built-in.
 
   The matching engine hands `Context.applyTemplates` a node-set;
   each netted node is routed through the registry uniformly (any
@@ -150,6 +154,7 @@ export class Transform {
     #collatedAbsolute;
     #expressions;
     #evaluator;
+    #identity;
 
     // built-in template bodies per XSLT 1.0 §5.8. these are plain
     // functions of a Context, just like user template bodies — the
@@ -188,7 +193,44 @@ export class Transform {
         return null;
     };
 
-    constructor (namespaces) {
+    // the identity element/root rule per §7.5: shallow copy — the
+    // qualified name, the attributes, any namespace declarations,
+    // and the processed children — via markup-mixup's #tag
+    // designator. this is what { identity: true } installs in place
+    // of the default bodies.
+    static #identityElement = function (ctx) {
+        const node = ctx.node;
+        const out = { '#tag': [
+            node.nodeType === 1 ? node.tagName :
+                node.nodeName ] };
+        // attributes, spread into the spec (markup-mixup emits
+        // xmlns declarations first, then the rest alphabetically)
+        const attrs = ctx.getAttributes();
+        for (const k of Object.keys(attrs)) out[k] = attrs[k];
+        // namespace declarations: copy the node's own declarations
+        // so prefixes survive the round trip (markup-mixup re-states
+        // inherited ones from the insertion point anyway)
+        if (node.attributes)
+            for (const a of node.attributes)
+                if (a.prefix === 'xmlns' ||
+                    (a.name === 'xmlns' && !a.prefix))
+                    out[a.name] = a.value;
+        out['#tag'] = out['#tag'].concat(ctx.applyTemplates());
+        return out;
+    };
+
+    // the identity comment rule: preserve the comment
+    static #identityComment = function (ctx) {
+        return { '#comment': ctx.node.data };
+    };
+
+    // the identity processing-instruction rule: preserve the PI
+    static #identityPI = function (ctx) {
+        return { '#processing-instruction':
+            [ctx.node.target, ctx.node.data] };
+    };
+
+    constructor (namespaces, { identity = false } = {}) {
         this.namespaces = new NamespaceMap(namespaces);
 
         // derive mappings from the document root if nothing was given
@@ -211,13 +253,19 @@ export class Transform {
         // priorities distinct: getPriority takes the max across
         // branches, so a union would compute 0 and beat bare-name
         // user templates (priority 0) on ties, where first-
-        // registered wins.
-        this.registerMatch('*', Transform.#builtinElement);
-        this.registerMatch('/', Transform.#builtinRoot);
+        // registered wins. identity mode (§7.5) swaps the element
+        // and root bodies for the shallow-copy form and preserves
+        // comments and PIs.
+        this.#identity = identity;
+        this.registerMatch('*', identity ?
+            Transform.#identityElement : Transform.#builtinElement);
+        this.registerMatch('/', identity ?
+            Transform.#identityElement : Transform.#builtinRoot);
         this.registerMatch('text()', Transform.#builtinText);
-        this.registerMatch('comment()', Transform.#builtinComment);
-        this.registerMatch('processing-instruction()',
-            Transform.#builtinPI);
+        this.registerMatch('comment()', identity ?
+            Transform.#identityComment : Transform.#builtinComment);
+        this.registerMatch('processing-instruction()', identity ?
+            Transform.#identityPI : Transform.#builtinPI);
 
         // the node-match index, per spec: WeakMap(root, WeakMap(node,
         // Set(templates))), populated lazily by #walk at the beginning

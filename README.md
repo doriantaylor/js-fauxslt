@@ -155,8 +155,8 @@ default priorities are computed per elementary pattern branch (a name
 test is `0`, a wildcard or node-type test `-0.5`, a
 namespace/any-namespace wildcard or `processing-instruction()` `-0.25`,
 and any predicate bumps the branch to `0.5`). An explicit `priority`
-can be given at registration. Equal priorities resolve to the most
-recently registered template, per XSLT 1.0 conflict recovery.
+can be given at registration. Equal priorities resolve to the
+first-registered template.
 
 Templates can be registered in a **mode**: a template registered for
 mode `m` only applies when the transform is running in that mode, with
@@ -164,18 +164,83 @@ no fallback to default-mode templates (per §5.4). The mode is chosen
 at `transform(node, params, mode)` and inherited through
 `applyTemplates` unless overridden.
 
-A node with no matching template in the active mode passes through
-unchanged (a deep copy). This mirrors the built-in template rule of
-XSLT, simplified: XSLT's built-in rule recurses into children, FauXSLT
-deep-copies the node wholesale instead — a deliberate simplification.
+### Built-in Template Rules
+
+Every `Transform` installs the [XSLT 1.0 §5.8](https://www.w3.org/TR/xslt-10/#built-in-rule)
+built-in template rules at construction, as ordinary registered
+templates in the default mode:
+
+| pattern | priority | behaviour |
+| --- | --- | --- |
+| `*` | −0.5 | recurse into children (attributes **not** copied) |
+| `/` | 0 | recurse into children (root nodes) |
+| `text()` | −0.5 | copy the string value |
+| `comment()` | −0.5 | drop the node |
+| `processing-instruction()` | −0.25 | drop the node |
+
+Nothing about the built-ins is special: they are ordinary templates,
+and **re-registering the same pattern+mode overwrites the built-in**
+— that is the supported override path (a user `*` replaces the
+element rule; a user `text()` replaces the text rule). A bare-name
+user template (`li`, priority 0) always beats the built-in `*`
+(−0.5), and a differently-spelled wildcard-equivalent pattern
+(`node()`, `child::*`, priority −0.5) loses the tie to the built-in,
+because equal priorities resolve to the first-registered template —
+re-register `*` if you want to intercept everything.
+
+Two deliberate divergences from §5.8:
+
+- **Non-default modes carry no built-ins.** The built-ins are
+  installed once, in the default mode only. A node transformed in a
+  mode with no matching template hits the fallback below (recursion
+  for elements, drop for text) rather than a mode-local built-in.
+  A user wanting built-ins in a mode registers their own
+  `*`/`text()`/etc. there — the ordinary registration path.
+- **Document nodes are reachable only by absolute patterns.** The
+  matching engine nets nodes from each visited element/document as
+  context, so a document node is only ever netted by an absolute
+  pattern. The built-in `/` (priority 0) outranks lower-priority
+  absolute node tests such as `//node()` (−0.5) there — registering
+  `/` is the override.
+
+Note that `transform(documentNode)` is unsupported:
+`markup-mixup`'s replace requires the target to have a parent node.
+The `/` rule is reachable via `applyTemplates` over document-valued
+`select()` results.
+
+### Node Test Patterns
+
+Because the matching engine evaluates each pattern with each
+element or document as *context* and records every node it nets,
+node test patterns (`text()`, `comment()`,
+`processing-instruction()`) and attribute patterns (`@attr`) match
+genuinely: the netted node is the one the template runs against.
+Predicated node tests (`text()[normalize-space(.)='x']`) evaluate
+natively in the same scan. DocumentType nodes are never netted by
+any XPath node test and always fall to the fallback.
+
+### No-Match Fallback
+
+A node with no matching template in the active mode recurses into
+its children, per the built-in element rule's shape — claimed
+descendants still fire; text, comments, and processing instructions
+with no claiming template drop. A template body that returns
+nothing removes its node outright.
 
 ## API
 
 ### `Transform`
 
-- **`new Transform(namespaces?)`** — create an empty transform;
+- **`new Transform(namespaces?, opts?)`** — create a new transform;
   namespace prefix mappings derive from `document.documentElement`
-  unless given.
+  unless given. `opts.identity` (default `false`) installs the
+  [§7.5](https://www.w3.org/TR/xslt-10/#identity-copying) identity
+  behaviour in place of the default built-ins: the `*`/`/` bodies
+  shallow-copy the node — qualified name, attributes, in-scope
+  namespace declarations, and processed children — and comments
+  and processing instructions are preserved. Copy fidelity is
+  best-effort: adjacent-text merging, attribute prefix edge cases,
+  and doctype nodes are documented limitations.
 - **`registerMatch (pattern, bodyFn, opts?)`** — register a body
   function against an XSLT 1.0 §5.2 match pattern (validated at
   registration; invalid syntax throws). `opts` is either an options
@@ -187,7 +252,8 @@ deep-copies the node wholesale instead — a deliberate simplification.
 - **`transform (node, params?, mode?)`** — transform `node` in place:
   find its best-matching template in the mode, hand the body a fresh
   `Context` (params minted per invocation), and replace the node
-  with the resulting markup.
+  with the resulting markup. A result that nets nothing removes the
+  node.
 - **`getMatchingTemplates (node, mode?)`** / **`getMatchingTemplate
   (node, mode?)`** — the matching templates for a node (sorted by
   descending priority) and the best one.

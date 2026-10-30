@@ -110,6 +110,13 @@ import { Context } from './context.js';
 
 export class Transform {
 
+    // see the constructor comments for what these hold
+    #nodeMatches;
+    #collated;
+    #collatedAbsolute;
+    #expressions;
+    #evaluator;
+
     constructor (namespaces) {
         this.namespaces = new NamespaceMap(namespaces);
 
@@ -123,37 +130,79 @@ export class Transform {
         this.templates = new Map();
         this.named = new Map();
 
-        // per-transform match cache, invalidated at every transform():
-        // Map<match-expression-string, Set<matched node>>
-        this._matchCache = new Map();
+        // the node-match index, per spec: WeakMap(root, WeakMap(node,
+        // Set(templates))), populated lazily by #walk at the beginning
+        // of transform(). keyed by root so unbound nodes, document
+        // fragments, and multiple documents each get their own index.
+        this.#nodeMatches = new WeakMap();
+
+        // collated compiled expressions for the scan: Map of
+        // xpath-string -> { expr, templates: Set(Template) }, built
+        // once per registration state, reused across transforms.
+        // absolute and id() branches are set aside for root testing.
+        this.#collated = null;
+        this.#collatedAbsolute = [];
 
         // compiled XPathExpression cache, keyed weakly by document (a
         // registry can serve multiple documents; the expressions
-        // themselves are reusable across transforms, so they outlive the
-        // per-transform match cache and are only held while the document
-        // lives). a single XPathEvaluator instance serves all documents.
-        this._expressions = new WeakMap();
-        this._evaluator = typeof XPathEvaluator === 'function' ?
+        // themselves are reusable across transforms, so they outlive
+        // the per-transform match cache and are only held while the
+        // document lives). a single XPathEvaluator instance serves all
+        // documents.
+        this.#expressions = new WeakMap();
+        this.#evaluator = typeof XPathEvaluator === 'function' ?
             new XPathEvaluator() : null;
     }
 
-    // get (or create) a compiled XPathExpression for a pattern in a
-    // document, via XPathEvaluator.createExpression. this front-loads
-    // the expression parse to once per (pattern, document) instead of
-    // once per evaluate() call in the match walk, and surfaces
-    // expression errors at first use — consistent with
-    // fail-at-registration.
-    _compiledExpression (compiled, doc) {
-        let byExpr = this._expressions.get(doc);
+    // get (or create) a compiled XPathExpression for an expression
+    // string in a document, via #evaluator.createExpression with the
+    // embedded namespace mapping. this front-loads the expression
+    // parse to once per (expression, document) instead of once per
+    // evaluate() call, and surfaces expression errors at first use —
+    // consistent with fail-at-registration.
+    #getExpression (string, doc) {
+        let byExpr = this.#expressions.get(doc);
         if (!byExpr) {
             byExpr = new Map();
-            this._expressions.set(doc, byExpr);
+            this.#expressions.set(doc, byExpr);
         }
-        const key = compiled.evalExpr || compiled.expr;
-        if (!byExpr.has(key))
-            byExpr.set(key, this._evaluator.createExpression(
-                key, this.nsResolver()));
-        return byExpr.get(key);
+        if (!byExpr.has(string))
+            byExpr.set(string, this.#evaluator.createExpression(
+                string, this.nsResolver()));
+        return byExpr.get(string);
+    }
+
+    // get (or create) a compiled XPathExpression for an expression
+    // string in a document, via #evaluator.createExpression with the
+    // embedded namespace mapping. this front-loads the expression
+    // parse to once per (expression, document) instead of once per
+    // evaluate() call, and surfaces expression errors at first use —
+    // consistent with fail-at-registration. public because Context
+    // leans on the same cache for select()/test().
+    compiledExpression (string, doc) {
+        return this.#getExpression(string, doc);
+    }
+
+    // evaluate a node-set expression from a context node, returning
+    // an array of the nodes netted (snapshot semantics)
+    #evaluateNodes (string, node) {
+        const doc = node.ownerDocument || node;
+        const expr = this.#getExpression(string, doc);
+        const r = expr.evaluate(node,
+                                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+        const out = [];
+        for (let i = 0; i < r.snapshotLength; i++)
+            out.push(r.snapshotItem(i));
+        return out;
+    }
+
+    // evaluate an expression against a candidate node in boolean
+    // mode: does this node match this expression?
+    #evaluateBool (string, node) {
+        const doc = node.ownerDocument || node;
+        const expr = this.#getExpression(string, doc);
+        const r = expr.evaluate(node, XPathResult.BOOLEAN_TYPE, null);
+        return r.booleanValue;
     }
 
     // register a template against a match pattern. the pattern is
@@ -161,6 +210,8 @@ export class Transform {
     registerMatch (match, fn) {
         const t = new Template({ match, fn });
         this.templates.set(t.key, t);
+        // the collated expression index is stale: rebuild on demand
+        this.#collated = null;
         return t;
     }
 
@@ -178,94 +229,126 @@ export class Transform {
 
     // evaluate a match pattern as a node-set, through the per-transform
     // cache. absolute patterns (rooted with / or //) evaluate once
-    // evaluate a match pattern as a node-set union across the whole
-    // tree, through the per-transform cache. absolute patterns
-    // evaluate once from the document root. relative patterns are
-    // context-dependent: per section 5.2 they are evaluated with each
-    // node as context, so we walk the tree once, testing every
-    // element, and collect the nodes for which the pattern yields a
-    // node-set containing them. unions contribute per branch.
-    _matchSet (template, root) {
-        const expr = template.pattern;
-        if (this._matchCache.has(expr))
-            return this._matchCache.get(expr);
-
-        const set = new Set();
-
-        for (const branch of template.branches) {
-            if (branch.absolute) {
-                for (const n of this._evaluatePattern(branch, root))
-                    set.add(n);
-            }
-            else {
-                // relative branches are context-dependent: evaluate
-                // the branch with every node (plus the document
-                // itself) as context, collecting every node selected.
-                // a node matches iff it appears in this union, which
-                // anchors the pattern anywhere in the tree, exactly
-                // as xslt match patterns behave.
-                const doc =
-                    root.nodeType === 9 ? root : root.ownerDocument;
-                for (const n of this._evaluatePattern(branch, doc))
-                    set.add(n);
-                for (const context of this._walk(doc))
-                    for (const n of
-                        this._evaluatePattern(branch, context))
-                        set.add(n);
-            }
-        }
-
-        this._matchCache.set(expr, set);
-        return set;
-    }
-
-    // evaluate a pattern as a node-set snapshot from a context node,
-    // using the registry's precompiled XPathExpression
-    _evaluatePattern (compiled, node) {
-        const doc = node.ownerDocument || node;
-        const expr = this._compiledExpression(compiled, doc);
-        const r = expr.evaluate(node,
-                                XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-        const out = [];
-        for (let i = 0; i < r.snapshotLength; i++)
-            out.push(r.snapshotItem(i));
-        return out;
-    }
-
-    // iterate every node in the document, in document order
-    _walk (doc) {
-        const out = [];
-        if (doc.createNodeIterator && doc.documentElement) {
-            const iter = doc.createNodeIterator(
-                doc.documentElement, NodeFilter.SHOW_ALL);
-            let n;
-            while ((n = iter.nextNode())) out.push(n);
-        }
-        return out;
-    }
-
-    // find the best-matching template for a node: highest §5.5
-    // priority; ties break to the most recently registered, which
-    // falls out of Map insertion order (later entries iterated
-    // later), per XSLT 1.0 conflict recovery
-    bestMatch (node, root) {
-        let best = null;
+    // collate the registered match templates into a compiled
+    // expression index: Map of expression string ->
+    // { string, templates: Set(Template), bool: boolExpr? },
+    // deduplicating semantically identical expressions (the first
+    // Template's compiled copy is canonical). absolute and id()
+    // branches are set aside for root testing. rebuilt lazily after
+    // any registration.
+    #collate () {
+        if (this.#collated) return this.#collated;
+        const byString = new Map();
+        const absolutes = [];
         for (const t of this.templates.values()) {
-            const set = this._matchSet(t, root);
-            if (!set.has(node)) continue;
-            const p = t.getPriority();
-            // strictly greater only: an equal-priority template
-            // encountered later supersedes only by iteration order,
-            // which IS registration order
-            if (!best || p > best.p) best = { t, p };
+            for (const b of t.branches || []) {
+                const string = b.evalExpr;
+                if (b.absolute) {
+                    absolutes.push({ string, template: t, branch: b });
+                    continue;
+                }
+                let entry = byString.get(string);
+                if (!entry) {
+                    entry = { string, bool: b.boolExpr,
+                        templates: new Set() };
+                    byString.set(string, entry);
+                }
+                entry.templates.add(t);
+            }
         }
-        return best ? best.t : null;
+        this.#collatedAbsolute = absolutes;
+        this.#collated = byString;
+        return byString;
+    }
+
+    // populate #nodeMatches for a root, per the spec's algorithm:
+    // walk the tree from the root, test each node against each
+    // collated expression (boolean mode where the rewritten branch
+    // provides a self-anchored form, per-context node-set evaluation
+    // otherwise), and record the matching templates per node.
+    // absolute and id() branches are tested once against the root.
+    #walk (root) {
+        if (this.#nodeMatches.has(root))
+            return this.#nodeMatches.get(root);
+
+        const byNode = new WeakMap();
+        this.#nodeMatches.set(root, byNode);
+
+        const byString = this.#collate();
+
+        // record a match
+        const record = (node, t) => {
+            let set = byNode.get(node);
+            if (!set) {
+                set = new Set();
+                byNode.set(node, set);
+            }
+            set.add(t);
+        };
+
+        // absolute and id() branches net their nodes from the root
+        for (const { string, template } of this.#collatedAbsolute)
+            for (const n of this.#evaluateNodes(string, root))
+                record(n, template);
+
+        // visit every node in document order, testing each ELEMENT
+        // against every collated expression: XPath 1.0 only accepts
+        // documents and elements as context nodes, so text, comments,
+        // etc. cannot be tested (and cannot match element/attribute
+        // patterns). they are still visited so their element children
+        // are reached.
+        const visit = (node) => {
+            const testable = node.nodeType === 1 || node.nodeType === 9;
+            if (testable) {
+                for (const entry of byString.values()) {
+                    const hit = entry.bool ?
+                        this.#evaluateBool(entry.bool, node) :
+                        this.#evaluateNodes(entry.string, node)
+                            .includes(node);
+                    if (hit)
+                        for (const t of entry.templates) record(node, t);
+                }
+            }
+            if (node.childNodes)
+                for (const child of node.childNodes) visit(child);
+        };
+        // begin at the root: unbound elements are provisionally
+        // bound to the root they were reached through (fragments
+        // included)
+        visit(root);
+
+        return byNode;
+    }
+
+    // array of matching templates for a node, sorted by descending
+    // priority; equal priorities keep registration order (the Set
+    // iterates in insertion sequence). the mode parameter arrives
+    // with mode support (see the registration spec).
+    getMatchingTemplates (node) {
+        const root = node.ownerDocument || node;
+        const byNode = this.#walk(root);
+        const set = byNode.get(node);
+        if (!set || !set.size) return [];
+        return Array.from(set).sort((a, b) =>
+            b.getPriority() - a.getPriority());
+    }
+
+    // the single best template for a node: highest priority, most
+    // recently registered on ties (sort stability over the Set's
+    // insertion sequence)
+    getMatchingTemplate (node) {
+        const ts = this.getMatchingTemplates(node);
+        return ts.length ? ts[0] : null;
     }
 
     // transform a node in place: find its best-matching template, hand
     // its body a fresh Context (params yoked at mint), and replace the
     // node with the result. all DOM assembly happens here, via MARKUP.
+    // the node-match index is per document state: transforms mutate
+    // the DOM, so it is dropped and rebuilt lazily on each call.
     transform (node, params) {
+        this.#nodeMatches = new WeakMap();
+
         const ctx  = new Context(this, node, params);
         const spec = ctx.applyTemplates('self::node()');
 

@@ -253,3 +253,26 @@ test('callTemplate mints a fresh context with merged params', async ({ page }) =
   expect(out.namedParams.greeting).toBe('hi');  // pass-through
   expect(out.namedParams.via).toBe('call');     // explicit params win
 });
+test('getMatchingTemplates returns matches sorted by priority', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    faux.registerMatch('li', function () { return null; });            // 0
+    faux.registerMatch('li[contains(@class, "item")]',                   // 0.5
+      function () { return null; });
+    faux.registerMatch('*', function () { return null; });               // -0.5
+    const li = document.querySelectorAll('#items li')[0];
+    const ts = faux.getMatchingTemplates(li);
+    return {
+      count: ts.length,
+      priorities: ts.map(t => t.getPriority()),
+      best: faux.getMatchingTemplate(li) === ts[0],
+      none: faux.getMatchingTemplate(document.querySelector('#para')) &&
+        document.querySelector('#para').nodeType,
+    };
+  });
+
+  expect(out.count).toBe(3);
+  expect(out.priorities).toEqual([0.5, 0, -0.5]);
+  expect(out.best).toBe(true);
+});

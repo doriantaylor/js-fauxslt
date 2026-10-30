@@ -95,8 +95,8 @@ export class Context {
   // XPathExpression cache — select() is typically called in loops,
   // and createExpression front-loads the parse.
   select (expression) {
-    const expr = this.registry._compiledExpression(
-      { evalExpr: expression }, this.doc);
+    const expr = this.registry.compiledExpression(
+      expression, this.doc);
     const r = expr.evaluate(this.node, XPathResult.ANY_TYPE, null);
     switch (r.resultType) {
       case XPathResult.NUMBER_TYPE:  return r.numberValue;
@@ -116,9 +116,10 @@ export class Context {
     return !!this.select(expression);
   }
 
-  // find the best template for a node through the registry
+  // find the best template for a node through the registry's
+  // node-match index
   _bestTemplate (node) {
-    return this.registry.bestMatch(node, this.doc);
+    return this.registry.getMatchingTemplate(node);
   }
 
   // apply templates to the nodes netted by the expression (default:

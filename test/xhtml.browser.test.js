@@ -30,7 +30,7 @@ test('patterns match and transform in XHTML (XML-parsed) documents', async ({ pa
       return { '#p': 'xhtml-transformed: ' + ctx.node.textContent };
     });
     const node = document.getElementById('para');
-    const matched = !!faux.bestMatch(node, document);
+    const matched = !!faux.getMatchingTemplate(node);
     faux.transform(node);
     return {
       contentType: document.contentType,

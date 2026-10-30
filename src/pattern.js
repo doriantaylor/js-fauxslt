@@ -94,6 +94,26 @@ function rewriteBranch (branch) {
   return rewritten;
 }
 
+// render a rewritten single-step relative branch as a self-anchored
+// boolean test expression: para becomes self::html:para, and
+// b[parent::a] becomes self::html:b[parent::a]. evaluating this with
+// a candidate node as context, in boolean mode, decides whether the
+// node matches the branch — the form the preemptive scan in
+// Transform wants. branches whose subject step is an attribute,
+// self, or parent step (and multi-step branches that were not
+// rewritten) have no such form and yield null; the scan falls back
+// to per-context node-set evaluation for those.
+function selfAnchor (branch) {
+  if (!branch || branch.type !== 'path' ||
+    branch.from !== 'context')
+    return null;
+  const steps = branch.steps || [];
+  if (steps.length !== 1) return null;
+  const s = steps[0];
+  if (s.type !== 'step' || s.axis === 'attribute') return null;
+  return serStep(Object.assign({}, s, { axis: 'self' }));
+}
+
 // compile a pattern: validate syntax, reject key(), rewrite unprefixed
 // element name tests to the XHTML prefix, split unions, compute §5.5
 // priorities, and rewrite relative multi-step branches to single-step
@@ -135,6 +155,7 @@ export function compilePattern (expr, opts = {}) {
     return {
       expr: serializePattern(rewritten),
       evalExpr: serializePattern(rewritten),
+      boolExpr: selfAnchor(rewritten),
       priority,
       absolute: isAbsolute(b),
       ast: rewritten,

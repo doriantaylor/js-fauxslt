@@ -251,13 +251,16 @@ export class Transform {
         return best ? best.t : null;
     }
 
-    // transform a node in place: find its best-matching template, call
-    // it with a fresh Context bound, and replace the node with the
-    // result. invalidates the match cache for this invocation.
+    // transform a node in place: find its best-matching template, hand
+    // its body a fresh Context (params yoked at mint), and replace the
+    // node with the result. all DOM assembly happens here, via MARKUP.
     transform (node, params) {
-        const ctx  = new Context(this, node);
-        const spec = ctx.applyTemplates('self::node()', params);
+        const ctx  = new Context(this, node, params);
+        const spec = ctx.applyTemplates('self::node()');
 
-        return MARKUP({ replace: node, spec: spec });
+        // args carries the Context so nested spec callbacks receive it
+        // (as `this` for plain functions, as the first argument
+        // otherwise); MARKUP returns the last node added
+        return MARKUP({ replace: node, spec: spec, args: [ctx] });
     }
 }

@@ -22,17 +22,22 @@
   XPath methods. It also requires the current node as the basis for
   arbitrary XPath expressions.
 
+  The constructor furthermore takes the parameter object, which is
+  minted anew with each Context (see below) so that mutation of one
+  template's parameters cannot leak into another's — no spooky action
+  at a distance.
+
   Here is how this class would be invoked from `Transform`:
 
   ```
   // as part of class Transform
 
   transform (node, params) {
-      const ctx  = new Context(this, node);
-      const spec = ctx.applyTemplates('self::node()', params);
+      const ctx  = new Context(this, node, params);
+      const spec = ctx.applyTemplates('self::node()');
 
       // note that MARKUP returns the last node added
-      return MARKUP({ replace: node, spec: spec });
+      return MARKUP({ replace: node, spec: spec, args: [ctx] });
   }
   ```
 
@@ -42,9 +47,11 @@
   in the `Transform` class.
 
   Note that the parameters should propagate, similar to pass-through
-  parameters in later XSLTs, but the parameter object should be copied
-  via `Object.assign` before being handed to the template body
-  function.
+  parameters in later XSLTs, but the parameter object should be
+  copied via `Object.assign` before being handed to the template body
+  function — hence `applyTemplates` and `callTemplate` mint a fresh
+  Context (and thus a fresh merged parameter object) per invocation:
+  the incoming `params` are merged over the current Context's own.
 
   We need analogues of the following functionality for handling
   arbitrary XPath:
@@ -67,14 +74,19 @@
  */
 
 
-import MARKUP from 'markup-mixup';
-
 export class Context {
 
-  constructor (registry, node) {
+  constructor (registry, node, params) {
     this.registry = registry;
     this.node = node;
     this.doc = node.ownerDocument || node;
+
+    // parameters are yoked to the Context at mint: each invocation
+    // gets its own (shallow) copy, so downstream templates can mutate
+    // their params without leaking into siblings or ancestors. the
+    // merge chain is most-specific-wins: registry globals <
+    // transform() params < applyTemplates/callTemplate params.
+    this.params = Object.assign({}, params || {});
   }
 
   // evaluate an arbitrary expression: returns a node array, number,
@@ -110,8 +122,9 @@ export class Context {
   }
 
   // apply templates to the nodes netted by the expression (default:
-  // the current node's children). returns a DocumentFragment of the
-  // concatenated results, or null if nothing was produced.
+  // the current node's children). returns an array of results —
+  // markup-mixup specs and/or DOM nodes — or an empty array. this is
+  // itself a valid spec, so DOM assembly stays in `Transform.transform`.
   applyTemplates (expression, params) {
     let nodes = [];
     if (typeof expression === 'undefined' ||
@@ -122,30 +135,37 @@ export class Context {
       nodes = Array.isArray(out) ? out : [out];
     }
 
-    const frag = this.doc.createDocumentFragment();
+    const results = [];
     for (const n of nodes) {
       const t = this._bestTemplate(n);
       if (!t) {
-        // no template: keep the node as-is (analogous to the
-        // built-in template in XSLT, which copies through)
-        frag.appendChild(n.cloneNode(true));
+        // no template: keep the node as-is. this mirrors the
+        // built-in template rule of XSLT, which passes unclaimed
+        // nodes through (here by deep copy rather than recursion —
+        // a deliberate simplification, documented in the README).
+        results.push(n.cloneNode(true));
         continue;
       }
-      const ctx = new Context(this.registry, n);
-      const result = t.fn.call(ctx, params || {}, n);
+      // fresh Context per node: params merge incoming over current
+      const ctx = new Context(this.registry, n,
+        Object.assign({}, this.params, params));
+      const result = t.fn(ctx);
       if (result === null || typeof result === 'undefined') continue;
-      this._append(frag, result, ctx);
+      results.push(result);
     }
-    return frag.childNodes.length ? frag : null;
+    return results;
   }
 
   // invoke a named template with the current node as context
   callTemplate (name, params) {
     const t = this.registry.named.get(name);
     if (!t) return null;
-    const ctx = new Context(this.registry, this.node);
-    const result = t.fn.call(ctx, params || {}, this.node);
-    return result;
+
+    // a named template gets its own Context: the incoming params
+    // merge over this Context's own (pass-through, as above)
+    const ctx = new Context(this.registry, this.node,
+      Object.assign({}, this.params, params));
+    return t.fn(ctx);
   }
 
   // clone the nodes netted by the expression for splicing into
@@ -158,15 +178,5 @@ export class Context {
     const frag = this.doc.createDocumentFragment();
     for (const n of nodes) frag.appendChild(n.cloneNode(true));
     return frag;
-  }
-
-  // bake a result (spec or node) and append to a fragment. specs are
-  // baked via the registry's fragment-bake so nothing attaches to the
-  // live document during baking.
-  _append (frag, result, ctx) {
-    let out = result;
-    if (!(result instanceof Node))
-      out = ctx.registry._bake(result, ctx);
-    if (out && out.nodeType) frag.appendChild(out);
   }
 }

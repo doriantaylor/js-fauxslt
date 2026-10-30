@@ -26,8 +26,8 @@ test('patterns match and transform in XHTML (XML-parsed) documents', async ({ pa
 
   const out = await page.evaluate(() => {
     const faux = new window.fauxslt.Transform();
-    faux.registerMatch("p[@id='para']", function () {
-      return { '#p': 'xhtml-transformed: ' + this.node.textContent };
+    faux.registerMatch("p[@id='para']", function (ctx) {
+      return { '#p': 'xhtml-transformed: ' + ctx.node.textContent };
     });
     const node = document.getElementById('para');
     const matched = !!faux.bestMatch(node, document);
@@ -51,8 +51,8 @@ test('HTML and XHTML transforms agree via the same pattern', async ({ page }) =>
   await page.waitForFunction('window.__ready === true');
   const htmlOut = await page.evaluate(() => {
     const faux = new window.fauxslt.Transform();
-    faux.registerMatch("p[@id='para']", function () {
-      return { '#p': 'same: ' + this.node.textContent };
+    faux.registerMatch("p[@id='para']", function (ctx) {
+      return { '#p': 'same: ' + ctx.node.textContent };
     });
     faux.transform(document.getElementById('para'));
     // the replacement carries no id; assert on main's first p
@@ -71,8 +71,8 @@ test('HTML and XHTML transforms agree via the same pattern', async ({ page }) =>
   await page.waitForFunction('window.__ready === true');
   const xhtmlOut = await page.evaluate(() => {
     const faux = new window.fauxslt.Transform();
-    faux.registerMatch("p[@id='para']", function () {
-      return { '#p': 'same: ' + this.node.textContent };
+    faux.registerMatch("p[@id='para']", function (ctx) {
+      return { '#p': 'same: ' + ctx.node.textContent };
     });
     faux.transform(document.getElementById('para'));
     return document.querySelector('main > p')?.textContent;

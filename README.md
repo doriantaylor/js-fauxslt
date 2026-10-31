@@ -189,8 +189,10 @@ URI) works either way.
 Escape hatches for mixed-namespace documents: an explicit prefix
 (`svg:circle`) matches whatever the prefix is bound to (bound through
 the `Transform` constructor's namespace map or an in-scope `xmlns:*`
-declaration), and `*:name` matches any namespace. A document that
-declares its own `xmlns:_` prefix wins: the synthetic rewrite is
+declaration), and a namespace wildcard (`svg:*`) matches every name in
+that namespace. (The any-namespace wildcard `*:name` is in the XPath
+1.0 grammar, but Chromium's engine does not implement it.) A document
+that declares its own `xmlns:_` prefix wins: the synthetic rewrite is
 disabled there, and `_:foo` means what the document declared.
 
 One registration-time limitation: a template's pattern namespace is

@@ -969,3 +969,41 @@ test('a user-declared _ prefix in an explicit map wins and disables the rewrite'
   expect(out.matchedPlain).toEqual(['*']);
   expect(out.span).toBe(true);
 });
+
+test('registration-rewritten patterns stay resolvable cross-registry', async ({ page }) => {
+  // a registry built on a default-namespaced source (here: an
+  // explicit map's empty-prefix binding, same shape as an
+  // XHTML-ambient registry) compiles `p` to `_:p`. matched against
+  // a DIFFERENT document with no default namespace, the pattern
+  // must not crash the evaluator: `_` falls back to the registry's
+  // own default URI, the pattern may simply net nothing there (the
+  // documented cross-document limitation), and the transform
+  // proceeds
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform({ '': 'urn:source' });
+    faux.registerMatch('p', function (ctx) {
+      return { '#span': 'claimed: ' + ctx.node.textContent };
+    });
+    // the eval document: HTML, namespace-less, no default namespace
+    const p = document.getElementById('para');
+    const main = p.parentNode;
+    const ts = faux.getMatchingTemplates(p);
+    let threw = null;
+    try { faux.transform(p); }
+    catch (e) { threw = e.message; }
+    // the built-in * recursed: the para's text survived the
+    // replacement (the para itself is gone — attributes drop per
+    // §5.8 — so address by the parent's text)
+    return { patterns: ts.map(t => t.pattern), threw,
+      mainText: main.textContent };
+  });
+
+  // no crash: the built-in * matched (the rewritten `_:p` netted
+  // nothing against the wrong-namespace document, per the
+  // documented limitation) and the transform completed — the para
+  // was replaced by its recursion-copied text
+  expect(out.threw).toBeNull();
+  expect(out.patterns).toEqual(['*']);
+  expect(out.mainText).toContain('some text');
+});

@@ -518,7 +518,19 @@ export class Transform {
             // first-wins: a document's own declarations survive,
             // including its own xmlns:_
             merged.derive(elem);
-            const uri = defaultNamespaceURI(doc);
+            // the synthetic `_`: the EVALUATION document's default
+            // namespace when it has one; otherwise fall back to the
+            // REGISTRY's own default URI, so patterns rewritten at
+            // registration time (`_:name`, against the registry's
+            // ambient document or explicit map) stay RESOLVABLE
+            // when matched against a different, non-default-
+            // namespaced document — they may net nothing there
+            // (cross-document limitation, per the README), but they
+            // must not crash the evaluator. under the collision
+            // rule a user `_` rides the merge and the fallback
+            // stands down.
+            const uri = defaultNamespaceURI(doc) ||
+                this.namespaces.get('');
             if (uri && !this.#userUnderscore &&
                 !merged.has(DEFAULT_PREFIX))
                 merged.set(DEFAULT_PREFIX, uri);

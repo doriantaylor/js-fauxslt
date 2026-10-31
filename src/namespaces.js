@@ -56,7 +56,7 @@ export class NamespaceMap extends Map {
 
   constructor (initial) {
     super(Object.entries(DEFAULT_NAMESPACES));
-    // the synthetic xhtml prefix kept as a real binding
+    // the html: binding, kept for prefixed usage in templates
     this.set(XHTML_PREFIX, XHTML_NAMESPACE);
     if (initial) this.absorb(initial);
   }

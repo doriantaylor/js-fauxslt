@@ -36,11 +36,14 @@
 // identically.
 //
 // Escape hatches: an explicit prefix (`svg:circle`) matches whatever
-// it is bound to; `*:name` matches any namespace — useful in
-// mixed-namespace documents. A user-declared `_` binding (xmlns:_ in
-// scope, or a `_` key in an explicit namespace map) wins over the
-// synthetic one and disables the rewrite, so the user's own `_:foo`
-// means what they declared (see namespaces.js).
+// it is bound to; a namespace wildcard (`svg:*`) matches every name
+// in that namespace — useful in mixed-namespace documents. (The
+// any-namespace wildcard `*:name` is part of XPath 1.0's grammar,
+// but Chromium's engine does not implement it — it is rejected at
+// compile time.) A user-declared `_` binding (xmlns:_ in scope, or
+// a `_` key in an explicit namespace map) wins over the synthetic
+// one and disables the rewrite, so the user's own `_:foo` means what
+// they declared (see namespaces.js).
 
 // XPath operator keywords: a bare NCName following a complete
 // operand can only be one of these

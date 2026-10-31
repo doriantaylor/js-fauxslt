@@ -13,7 +13,7 @@ import { Transform } from 'fauxslt';
 
 // sets up namespace mapping based on `document.documentElement`,
 // plus some sane defaults; Does The Right Thing™ with (non-X)HTML.
-const fauXSLT = window.fauXSLT = new Transform();
+const fauXSLT = window.fauXSLT = new Transform(null, { identity: true });
 
 // suppose we have some out-of-band value
 const isDraft = true;

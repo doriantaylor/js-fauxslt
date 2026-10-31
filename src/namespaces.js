@@ -3,10 +3,11 @@
 // and (b) is available to template code. When constructed without an
 // explicit map, mappings are derived from document.documentElement
 // (walking xmlns:* attributes up the ancestor chain), topped up with
-// defaults: the xml: namespace, xmlns, and the XHTML default for
+// defaults: the xml: namespace, xmlns, and the XHTML binding for the
 // (non-X)HTML documents, where the DOM reports unprefixed elements
-// with no namespaceURI and pattern names like svg:circle or xhtml
-// prefixes still need to resolve.
+// with no namespaceURI and prefixed name tests like svg:circle or
+// html:p still need to resolve. Unprefixed name tests are handled
+// separately — see the DEFAULT_PREFIX convention below.
 
 export const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
 

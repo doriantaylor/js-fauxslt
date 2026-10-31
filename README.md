@@ -178,7 +178,13 @@ own unprefixed elements.
 
 Documents without a default namespace (HTML parsed as text/html,
 no-namespace XML) are not rewritten at all: unprefixed names match
-namespace-less elements natively.
+namespace-less elements natively. Note that a text/html document
+whose root carries an explicit *non-XHTML* `xmlns` is broken input
+under this design: the raw attribute classifies it
+default-namespaced and rewrites to `_:name`, but the HTML parser
+still reports the XHTML namespaceURI on its elements, so the names
+match nothing. A polyglot document (text/html, `xmlns` = the XHTML
+URI) works either way.
 
 Escape hatches for mixed-namespace documents: an explicit prefix
 (`svg:circle`) matches whatever the prefix is bound to (bound through

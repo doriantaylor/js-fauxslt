@@ -146,6 +146,7 @@ import { Template } from './template.js';
 import { NamespaceMap, DEFAULT_PREFIX, defaultNamespaceURI }
   from './namespaces.js';
 import { Context } from './context.js';
+import { isDefaultNamespaced } from './expressions.js';
 
 export class Transform {
 
@@ -159,6 +160,11 @@ export class Transform {
     // when patterns must not be rewritten (no default namespace, or
     // the collision rule fired)
     #rewritePrefix;
+    // the registration-time collision result: a USER-declared `_`
+    // binding is in effect (an xmlns:_ in scope on the ambient
+    // root, or a `_` key in the explicit map), which wins over the
+    // synthetic one and disables the rewrite everywhere
+    #userUnderscore;
 
     // built-in template bodies per XSLT 1.0 §5.8. these are plain
     // functions of a Context, just like user template bodies — the
@@ -312,10 +318,10 @@ export class Transform {
 
         // a user `_` in effect anywhere in the map stands the
         // rewrite down
-        const userUnderscore = this.namespaces.has(DEFAULT_PREFIX) &&
+        this.#userUnderscore = this.namespaces.has(DEFAULT_PREFIX) &&
             this.namespaces.get(DEFAULT_PREFIX) !== defaultURI;
         this.#rewritePrefix =
-            defaultURI && !userUnderscore ? DEFAULT_PREFIX : null;
+            defaultURI && !this.#userUnderscore ? DEFAULT_PREFIX : null;
 
         // compiled match templates and named templates, in the shape
         // { key -> Template }
@@ -440,27 +446,22 @@ export class Transform {
     }
 
     // the effective default-namespace state for a document: the
-    // synthetic `_` rewrite is in effect when the registry's
-    // pattern rewrite fired (an explicit map's empty-prefix
-    // binding, or the ambient document's default namespace), and
-    // the evaluation document actually carries a default
-    // namespace that `_` can resolve to — unless the collision
-    // rule fired (a user-declared `_` in scope), in which case
-    // neither patterns nor expressions are rewritten. this is the
-    // ONE source consulted by both the registration-time pattern
-    // decision (the constructor, which computed the prefix from
-    // the same inputs) and the evaluation-time expression decision
-    // (Context.select).
+    // synthetic `_` rewrite is in effect when the evaluation
+    // document actually carries a default namespace (per the
+    // isDefaultNamespaced gate — the same single source for the
+    // decision in patterns and expressions), UNLESS the
+    // registration-time collision rule fired (a user-declared `_`:
+    // an xmlns:_ in scope, or a `_` key in the explicit map), in
+    // which case neither patterns nor expressions are rewritten.
+    // this is deliberately a per-EVALUATION-DOCUMENT decision: a
+    // template transforming nodes fetched via ctx.document() (an
+    // Atom feed, an SVG) gets `entry`/`circle` rewritten against
+    // THAT document's default namespace, whether or not the
+    // registry was built on a default-namespaced ambient document.
     effectiveDefaultPrefix (doc) {
-        if (!this.#rewritePrefix) return null;
+        if (this.#userUnderscore) return null;
         if (!doc || !doc.documentElement) return null;
-        // collision rule: a `_` declared in scope on this document's
-        // root wins and disables the rewrite here too
-        const root = doc.documentElement;
-        for (let p = root; p && p.nodeType === 1; p = p.parentNode)
-            if (p.getAttribute && p.getAttribute('xmlns:_') != null)
-                return null;
-        return defaultNamespaceURI(doc) ? DEFAULT_PREFIX : null;
+        return isDefaultNamespaced(doc) ? DEFAULT_PREFIX : null;
     }
 
     // get (or create) a compiled XPathExpression for an expression
@@ -492,25 +493,33 @@ export class Transform {
 
     // resolver for a specific evaluation document: the registry
     // bindings overlaid with the document's own declarations and
-    // the document's default namespace bound to `_` — unless the
-    // document, or the registry's map, already declares its own `_`
-    // (the collision rule)
+    // the document's default namespace bound to `_` (unless the
+    // document, or the registry's map, already declares its own
+    // `_` — the collision rule). the empty-prefix entry never
+    // reaches the resolver; its only role was feeding the forced
+    // `_`, so both are dropped before deriving, letting the
+    // document's own declarations (an xmlns:_ included) land
+    // first-wins
     #docResolver (doc) {
         const merged = new NamespaceMap();
         merged.absorb(this.namespaces);
         const elem = doc && doc.documentElement;
         if (elem && typeof elem.getAttribute === 'function') {
-            // first-wins: drop the registry's `_` (forced or user)
-            // before deriving, so a document's own xmlns:_
-            // declaration survives, then decide whether to force
-            // the default-namespace binding
-            const userUnderscore =
-                elem.getAttribute('xmlns:_') != null ||
-                this.namespaces.has(DEFAULT_PREFIX);
-            merged.delete(DEFAULT_PREFIX);
+            // `''` is never consulted by the resolver; drop it so
+            // derive() does not re-derive a forced `_` from the
+            // registry's inherited default-namespace entry
+            merged.delete('');
+            // drop the FORCED `_` only: when the registry map
+            // carries a USER-declared `_` (a different URI), it
+            // rides the merge untouched
+            if (this.namespaces.get(DEFAULT_PREFIX) ===
+                this.namespaces.get(''))
+                merged.delete(DEFAULT_PREFIX);
+            // first-wins: a document's own declarations survive,
+            // including its own xmlns:_
             merged.derive(elem);
             const uri = defaultNamespaceURI(doc);
-            if (uri && !userUnderscore &&
+            if (uri && !this.#userUnderscore &&
                 !merged.has(DEFAULT_PREFIX))
                 merged.set(DEFAULT_PREFIX, uri);
         }

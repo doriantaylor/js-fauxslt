@@ -99,9 +99,11 @@ test('Phase 0 probe: the resolver is never consulted for the empty prefix', asyn
   // DOM fact: elements of a text/html document carry the XHTML
   // namespaceURI regardless of any xmlns attribute — so the
   // default-namespaced classification (and the `_:name` rewrite)
-  // rests on the RAW ATTRIBUTE, not namespaceURI. either way the
-  // names match: natively via the engine's HTML accommodation when
-  // unrewritten, and through the XHTML-resolved `_:name` when not
+  // rests on the RAW ATTRIBUTE, not namespaceURI. for an
+  // xmlns=XHTML polyglot the names match either way (natively via
+  // the engine's HTML accommodation unrewritten, through the
+  // XHTML-resolved `_:name` rewritten); a NON-XHTML xmlns on a
+  // text/html root is broken input (documented in the README)
   expect(htmlOut.liNS).toBe('http://www.w3.org/1999/xhtml');
 });
 

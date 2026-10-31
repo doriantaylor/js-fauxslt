@@ -267,7 +267,7 @@ export function elementaryBranches (ast) {
 // serialize a pattern AST back to an XPath expression string. the
 // node shapes come from the grammar; this is the inverse of parse()
 // for the subset fauxslt supports, used to emit the rewritten
-// (xhtml-prefixed) evaluation expression.
+// (prefix-rewritten) evaluation expression.
 export function serializePattern (ast) {
   return serPattern(ast);
 }

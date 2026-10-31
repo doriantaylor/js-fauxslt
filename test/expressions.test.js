@@ -71,6 +71,41 @@ test('rewrite is idempotent', () => {
       rewriteExpression(expr, '_'));
 });
 
+// --- operator keywords after a wildcard --------------------------------
+// per XPath 1.0 §3.7 a bare name following a wildcard name test can
+// only be an operator keyword — never a node test
+test('keywords after @* stay verbatim', rw('p[@* and @id]',
+  '_:p[@* and @id]'));
+test('keywords after a bare wildcard stay verbatim',
+  rw('entry[* or @id]', '_:entry[* or @id]'));
+test('keywords after *:para stay verbatim', rw('*:para and @id',
+  '*:para and @id'));
+test('keywords after @* as a step stay verbatim', rw('@* and b',
+  '@* and _:b'));
+test('multiplication keeps operator position', rw('2 * 3', '2 * 3'));
+test('keywords after count(*) stay verbatim', rw('count(*) and @x',
+  'count(*) and @x'));
+test('wildcard then keyword then name', rw('a and * and b',
+  '_:a and * and _:b'));
+
+// --- whitespace-separated forms ---------------------------------------
+test('whitespace after an axis separator', rw('attribute :: href',
+  'attribute :: href'));
+test('whitespace between axis and its test',
+  rw('attribute:: href', 'attribute:: href'));
+test('whitespace on the namespace axis', rw('namespace :: p',
+  'namespace :: p'));
+test('whitespace after @', rw('@ href', '@ href'));
+test('whitespace after $', rw('$ foo', '$ foo'));
+test('whitespace-separated element axis still rewrites',
+  rw('child :: main', 'child :: _:main'));
+
+// --- non-ASCII NCNames -------------------------------------------------
+test('accented names are one NCName', rw('café', '_:café'));
+test('non-ASCII-initial names are one NCName', rw('élément',
+  '_:élément'));
+test('non-ASCII names in paths', rw('a//café', '_:a//_:café'));
+
 // --- falsy prefix: pass-through ---------------------------------------
 test('falsy prefix returns the expression unchanged', () => {
   const expr = '/html/head/title';

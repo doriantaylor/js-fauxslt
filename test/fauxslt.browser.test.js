@@ -891,3 +891,81 @@ test('no-namespace XML: unprefixed pattern and select match natively', async ({ 
   expect(out.count).toBe(2);
   expect(out.spans).toBe(2);
 });
+
+test('expressions resolve per evaluation document (cross-document)', async ({ page }) => {
+  // a registry built on the HTML page (no default namespace, no
+  // rewrite of its own patterns) fetching an Atom feed through
+  // ctx.document(): inside the template, a Context minted on a FEED
+  // node gets `entry` rewritten AND resolved against the feed's
+  // default namespace — the per-document resolver. (the ambient
+  // document is XHTML-less; before the per-document resolver the
+  // rewritten `_:entry` would have resolved against nothing)
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    let titles = null, count = null;
+    faux.registerMatch("p[@id='para']", function (ctx) {
+      const doc = ctx.document('/test/browser/feed.xml');
+      // mint a Context on the feed's root: unprefixed names there
+      // are rewritten per the FEED's default namespace and resolved
+      // through the feed's resolver
+      const fctx = new window.fauxslt.Context(faux,
+        doc.documentElement);
+      count = fctx.select('count(//entry)');
+      titles = fctx.select('//entry/title')
+        .map(n => n.textContent);
+      return null;
+    });
+    faux.transform(document.getElementById('para'));
+    return { count, titles };
+  });
+
+  expect(out.count).toBe(2);
+  expect(out.titles).toEqual(['first', 'second']);
+});
+
+test('a user-declared _ prefix in an explicit map wins and disables the rewrite', async ({ page }) => {
+  // the collision rule: a `_` key in the explicit namespace map is
+  // the USER's binding. the registry rewrites nothing, and the
+  // user's own `_:foo` patterns resolve against their declared URI
+  await go(page);
+  const out = await page.evaluate(() => {
+    const xml = new DOMParser().parseFromString(
+      '<w xmlns:u="urn:user:_"><u:p>claimed</u:p><plain>plain</plain></w>',
+      'application/xml');
+    // CSS can't address namespaced elements in parsed XML; find the
+    // u:p by URI through the DOM
+    const uP = Array.from(xml.documentElement.children)
+      .find(n => n.namespaceURI === 'urn:user:_' &&
+        n.localName === 'p');
+    const plain = xml.querySelector('plain');
+
+    const faux = new window.fauxslt.Transform({
+      '_': 'urn:user:_', '': 'urn:default:whatever' });
+    let seen = null;
+    // the user's own `_:p` means what they declared: urn:user:_
+    faux.registerMatch('_:p', function (ctx) {
+      seen = ctx.node.textContent;
+      return { '#span': seen };
+    });
+    const matchedPlain = faux.getMatchingTemplates(plain)
+      .map(t => t.pattern);
+    const matchedUP = !!faux.getMatchingTemplate(uP);
+    faux.transform(uP);
+    return { seen, matchedPlain, matchedUP,
+      compiledUser: faux.getMatchingTemplates(uP)[0]
+        ?.computedPattern,
+      span: !!xml.querySelector('span') };
+  });
+
+  // the user's `_:p` pattern matched their namespaced element
+  expect(out.seen).toBe('claimed');
+  expect(out.matchedUP).toBe(true);
+  expect(out.compiledUser).toBe('_:p');
+  // the `plain` element matched ONLY the built-in *: the map's
+  // empty-prefix binding did NOT rewrite `_:p` into something that
+  // would claim it (the user `_` disabled the rewrite), and no
+  // `_:plain` pattern exists
+  expect(out.matchedPlain).toEqual(['*']);
+  expect(out.span).toBe(true);
+});

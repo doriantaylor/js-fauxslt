@@ -12,14 +12,26 @@
 // `body` to `_:body`, with `_` bound to the root's default-namespace
 // URI in the resolver.
 //
-// The rewrite applies ONLY to bare NCNames in node-test position.
-// Skipped verbatim: literals, numbers, function names (before `(`),
-// axis names (before `::`), node-type calls (`node()`, `text()`, …)
-// and name tests on the attribute/namespace axes, names after `@`,
-// `$`, variable/QName prefixes (already-prefixed names,
-// `*:name`/`name:*` wildcards, bare `*`), operator keywords
-// (`and or div mod`) following an operand, and `.`/`..`. The hyphen
-// rule: `a-b` is one name, `a - b` is subtraction. The rewrite is
+// The rewrite applies ONLY to bare NCNames in node-test position,
+// per the XPath 1.0 §3.7 lexing rules:
+//   * literals and numbers: verbatim
+//   * a name before `(`: a function call (node-type tests like
+//     text()/node() land here) — verbatim
+//   * a name before `::`: an axis name — verbatim, remembered so the
+//     FOLLOWING name test is rewritten only on an element axis
+//   * names after `@` (including `@*`), on the attribute/namespace
+//     axes, and after `$`: never rewritten (attributes are
+//     namespace-less in the HTML DOM; variables are rejected
+//     downstream anyway)
+//   * already-prefixed QNames, `*:name`/`name:*` wildcards, and a
+//     bare `*`: verbatim
+//   * operator keywords (and/or/div/mod) following a complete
+//     operand — including one ending in a wildcard `*`: verbatim
+//   * `.`/`..`: verbatim
+//   * the hyphen rule: `a-b` is one name, `a - b` is subtraction
+// Whitespace may separate any of the pieces (`attribute :: href`,
+// `@ href`); NCNames may carry Unicode letters (XPath 1.0 NCNames
+// are Unicode, like the pattern grammar's). The rewrite is
 // idempotent: an already-rewritten expression re-serializes
 // identically.
 //
@@ -37,8 +49,11 @@ const OPERATOR_KEYWORDS = new Set(['and', 'or', 'div', 'mod']);
 // axes whose name tests are not element name tests
 const NON_ELEMENT_AXES = new Set(['attribute', 'namespace']);
 
-const NAME = /^([A-Za-z_][\w.-]*)(?::([A-Za-z_][\w.-]*|\*))?/;
-const QNAME = /^[A-Za-z_][\w.-]*(?::[A-Za-z_][\w.-]*|\*)?/;
+// NCName per XML: Unicode letter (or underscore) first, then
+// letters/digits/underscore/dot/hyphen — matching the pattern
+// grammar's classes
+const NAME = /^([\p{L}_][\p{L}\p{N}_.-]*)(?::([\p{L}_][\p{L}\p{N}_.-]*|\*))?/u;
+const QNAME = /^[\p{L}_][\p{L}\p{N}_.-]*(?::[\p{L}_][\p{L}\p{N}_.-]*|\*)?/u;
 const NUMBER = /^[0-9][\w.]*/;
 
 // rewrite an XPath expression string: bare unprefixed NCNames in
@@ -53,15 +68,23 @@ export function rewriteExpression (expr, prefix) {
   let i = 0;
   const len = src.length;
 
-  // lexer state, the XPath 1.0 §3.7 disambiguation in miniature:
-  // a bare NCName is a node test at the start of an expression,
-  // after an operator, after `/`, `|`, `(`, `,`, `[` — and an
-  // operator keyword only AFTER a complete operand
+  // lexer state, the §3.7 disambiguation in miniature:
+  // afterOperand — a complete operand has just ended (the next bare
+  //   name can only be an operator keyword; a `*` is
+  //   multiplication); node-test position otherwise
+  // axisPending — an axis name was consumed; the next name test is
+  //   on that axis (whitespace may intervene)
+  // starSeen — a wildcard `*` name test just ended (the next bare
+  //   name can only be an operator keyword)
   let afterOperand = false;
   let axisPending = null;
+  let starSeen = false;
 
   while (i < len) {
     const c = src[i];
+
+    // whitespace: pass through, preserving state
+    if (/\s/.test(c)) { out += c; i++; continue; }
 
     // literals pass through verbatim
     if (c === '"' || c === "'") {
@@ -74,6 +97,7 @@ export function rewriteExpression (expr, prefix) {
         i++;
       }
       afterOperand = true;
+      starSeen = false;
       continue;
     }
 
@@ -83,14 +107,16 @@ export function rewriteExpression (expr, prefix) {
       out += m[0];
       i += m[0].length;
       afterOperand = true;
+      starSeen = false;
       continue;
     }
 
     // a QName — possibly two NCNames around a colon
     const m = NAME.exec(src.slice(i));
-    if (m && (!afterOperand || OPERATOR_KEYWORDS.has(m[1]) ||
-      axisPending)) {
+    if (m && (!afterOperand && !starSeen ||
+      OPERATOR_KEYWORDS.has(m[1]) || axisPending)) {
       const name = m[0];
+      starSeen = false;
 
       // ...::  an axis name: pass through and remember the axis
       if (/^\s*::/.test(src.slice(i + name.length))) {
@@ -106,6 +132,7 @@ export function rewriteExpression (expr, prefix) {
         out += name;
         i += name.length;
         afterOperand = true;
+        axisPending = null;
         continue;
       }
 
@@ -130,9 +157,10 @@ export function rewriteExpression (expr, prefix) {
         continue;
       }
 
-      // operator keyword after an operand: verbatim, and the next
-      // bare name is a node test again
-      if (afterOperand && OPERATOR_KEYWORDS.has(m[1])) {
+      // operator keyword after an operand or wildcard: verbatim,
+      // and the next bare name is a node test again
+      if ((afterOperand || starSeen) &&
+        OPERATOR_KEYWORDS.has(m[1])) {
         out += name;
         i += name.length;
         afterOperand = false;
@@ -145,6 +173,8 @@ export function rewriteExpression (expr, prefix) {
       afterOperand = true;
       continue;
     }
+
+    starSeen = false;
 
     // `::` of an axis whose head did not lex as a name above, or a
     // stray colon (defensive; malformed input fails loudly at
@@ -170,24 +200,47 @@ export function rewriteExpression (expr, prefix) {
       continue;
     }
 
-    // `@` and the (optional) attribute name after it: attribute
-    // name tests are never rewritten (in the HTML DOM attributes
-    // are namespace-less; unprefixed attribute tests match exactly
-    // that)
+    // `@`, an (optional) attribute name or wildcard after it —
+    // possibly whitespace-separated: attribute name tests are never
+    // rewritten (in the HTML DOM attributes are namespace-less;
+    // unprefixed attribute tests match exactly that)
     if (c === '@') {
       out += '@';
       i++;
-      const am = QNAME.exec(src.slice(i));
-      if (am) { out += am[0]; i += am[0].length; }
+      let rest = src.slice(i);
+      const ws = /^\s*/.exec(rest)[0];
+      out += ws;
+      i += ws.length;
+      rest = src.slice(i);
+      if (rest[0] === '*') {
+        out += '*';
+        i++;
+        // `@*:name`: consume the wildcard's other half
+        rest = src.slice(i);
+        const wsm = /^\s*/.exec(rest)[0];
+        if (/^:/.test(rest.slice(wsm.length))) {
+          out += wsm + ':';
+          i += wsm.length + 1;
+          const nm = QNAME.exec(src.slice(i));
+          if (nm) { out += nm[0]; i += nm[0].length; }
+        }
+      }
+      else {
+        const am = QNAME.exec(rest);
+        if (am) { out += am[0]; i += am[0].length; }
+      }
       afterOperand = true;
       continue;
     }
 
-    // `$foo` and any QName after `$`: verbatim (variable
-    // references; fauxslt rejects them downstream anyway)
+    // `$foo` — a variable reference (possibly whitespace-separated):
+    // verbatim; fauxslt rejects it downstream anyway
     if (c === '$') {
       out += '$';
       i++;
+      const ws = /^\s*/.exec(src.slice(i))[0];
+      out += ws;
+      i += ws.length;
       const vm = QNAME.exec(src.slice(i));
       if (vm) { out += vm[0]; i += vm[0].length; }
       afterOperand = true;
@@ -195,22 +248,24 @@ export function rewriteExpression (expr, prefix) {
     }
 
     // `*`: bare wildcard, multiplication, or the namespace end of
-    // `*:name` (the wildcard form of a prefixed name test) — all
-    // verbatim. as multiplication it ends an operand; as a bare
-    // wildcard it IS one — either way the next bare name lexes in
-    // node-test position
+    // `*:name`. per §3.7, `*` after a complete operand is
+    // multiplication (an operator); otherwise it is a wildcard
+    // name test, and the next bare name can only be an operator
+    // keyword
     if (c === '*') {
+      const multiply = afterOperand;
       out += c;
       i++;
+      starSeen = !multiply;
+      afterOperand = !multiply;
       // `*:name`: consume the other half so it does not lex as a
       // bare NCName in node-test position
-      if (src[i] === ':') {
+      if (!multiply && src[i] === ':') {
         out += ':';
         i++;
         const wm = QNAME.exec(src.slice(i));
         if (wm) { out += wm[0]; i += wm[0].length; }
       }
-      afterOperand = false;
       continue;
     }
 
@@ -222,8 +277,8 @@ export function rewriteExpression (expr, prefix) {
       continue;
     }
 
-    // subexpressions: the next bare name is a node test after `(`/`,`
-    // `/[`, and an operand terminator after `)`/`]`
+    // subexpressions: the next bare name is a node test after
+    // `(`/`,`/`[`, and an operand terminator after `)`/`]`
     if (c === '(' || c === ',' || c === '[') {
       out += c;
       i++;
@@ -237,17 +292,8 @@ export function rewriteExpression (expr, prefix) {
       continue;
     }
 
-    // `::` whose head did not lex as a name (defensive; malformed
-    // input fails loudly at createExpression)
-    if (c === ':' && src[i + 1] === ':') {
-      out += '::';
-      i += 2;
-      continue;
-    }
-
-    // operators, whitespace, and anything else: verbatim. whitespace
-    // preserves state; operator characters end the operand state
-    if (/\s/.test(c)) { out += c; i++; continue; }
+    // operators and anything else: verbatim; operator characters
+    // end the operand state
     out += c;
     i++;
     afterOperand = false;

@@ -320,12 +320,29 @@ nothing removes its node outright.
 - **`select (expression)`** — evaluate arbitrary XPath; returns a
   node array, number, string, or boolean depending on the expression.
 - **`test (expression)`** — truthiness of `select(expression)`.
-- **`applyTemplates (xpath?, params?, mode?)`** — apply templates to
-  the nodes netted by the expression (default: the current node's
-  children). Returns an array of specs/nodes — itself a valid spec —
-  or **`null`** when nothing was netted, so
-  `ctx.applyTemplates(xpath) || fallback` is the supported fallback
-  idiom (`markup-mixup` absorbs `null` in every spec position).
+- **`applyTemplates (target?, params?, mode?)`** — apply templates to
+  a node-set. The first argument is polyvalent:
+
+  - omitted, `null`, `undefined`, or `''` — the current node's
+    children;
+  - an XPath string — evaluated through `select()` (rewritten per
+    the evaluation document's default namespace);
+  - a precompiled `XPathExpression` instance — evaluated *verbatim*
+    against the current node: a compiled object cannot be rewritten,
+    so your own prefix bindings are the contract. Prefer the string
+    form when the default-namespace rewrite is wanted, the instance
+    form when it is not;
+  - a `Node` — routed as a single-node set;
+  - an array of nodes, a `NodeList`, or an `HTMLCollection` —
+    routed as a node list.
+
+  Anything else — or a non-node member of a routed list — throws a
+  `TypeError`. This gives the XSLT `document($uri)` idiom a
+  spelling: `ctx.applyTemplates(ctx.document(uri))`. Returns an
+  array of specs/nodes — itself a valid spec — or **`null`** when
+  nothing was netted, so `ctx.applyTemplates(xpath) || fallback` is
+  the supported fallback idiom (`markup-mixup` absorbs `null` in
+  every spec position).
 - **`callTemplate (name, params?)`** — invoke a named template with
   the current node as context.
 - **`copyOf (expression)`** — clone the nodes netted by the

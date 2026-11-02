@@ -1093,3 +1093,91 @@ test('identity mode produces real elements in an HTML document', async ({ page }
   expect(out.childText).toBe('prefixed body');
   expect(out.childDecl).toBe('urn:x');
 });
+
+// --- polyvalent applyTemplates -------------------------------------------
+test('applyTemplates takes a polyvalent first argument', async ({ page }) => {
+  // each accepted form routes through the ordinary matching loop;
+  // anything else throws a TypeError. the XPathExpression leg is
+  // written against an expression that does not depend on the
+  // default-namespace rewrite (li in an HTML document), pinning the
+  // verbatim contract deliberately
+  await go(page);
+  const out = await page.evaluate(() => {
+    const results = {};
+    const faux = new window.fauxslt.Transform();
+    // a marker template claiming its node's text
+    faux.registerMatch('li', function (ctx) {
+      return { '#li': 'claimed: ' + ctx.node.textContent };
+    });
+
+    // a Context minted on the ul: every form routes the same three
+    // li children, so every leg's results are comparable
+    const ul = document.getElementById('items');
+    const ctx = new window.fauxslt.Context(faux, ul);
+
+    // results render as '#li' specs for claimed elements and as
+    // raw strings for text children (the built-in text rule copies
+    // their data) — the ul's childNodes include whitespace text,
+    // which trims to '' and is dropped from the comparison
+    const texts = (spec) => (Array.isArray(spec) ?
+      spec.map(s => typeof s === 'string' ?
+        s.trim() : s['#li']) : spec)
+      .filter(x => x);
+
+    // (1) null/omitted: the ul's children
+    results.omitted = texts(ctx.applyTemplates());
+    results.nullArg = texts(ctx.applyTemplates(null));
+
+    // (2) XPath string
+    results.string = texts(ctx.applyTemplates('li'));
+
+    // (3) XPathExpression instance — VERBATIM: no rewrite, the
+    // caller's expression is the contract (li is namespace-less
+    // here, so no rewrite is needed to match)
+    const expr = document.createExpression('li', null);
+    results.instance = texts(ctx.applyTemplates(expr));
+
+    // (4) a single Node
+    const li1 = ul.querySelectorAll('li')[0];
+    results.node = texts(ctx.applyTemplates(li1));
+
+    // (5) an array of nodes
+    const li2 = ul.querySelectorAll('li')[1];
+    results.array = texts(ctx.applyTemplates([li1, li2]));
+
+    // (6) a NodeList (querySelectorAll)
+    results.nodeList = texts(
+      ctx.applyTemplates(ul.querySelectorAll('li')));
+
+    // (7) an HTMLCollection (getElementsByTagName)
+    results.collection = texts(
+      ctx.applyTemplates(ul.getElementsByTagName('li')));
+
+    // (8) TypeError legs: a number and a plain non-node object
+    for (const [label, bad] of [
+      ['number', 42],
+      ['plain object', { nope: true }],
+      ['non-node member', ['li', 42]],
+    ]) {
+      try { ctx.applyTemplates(bad); results[label] = null; }
+      catch (e) { results[label] = e.name; }
+    }
+
+    return results;
+  });
+
+  const claimed = ['claimed: first', 'claimed: second',
+    'claimed: third'];
+  expect(out.omitted).toEqual(claimed);
+  expect(out.nullArg).toEqual(claimed);
+  expect(out.string).toEqual(claimed);
+  expect(out.instance).toEqual(claimed);
+  expect(out.node).toEqual(['claimed: first']);
+  expect(out.array).toEqual(['claimed: first', 'claimed: second']);
+  expect(out.nodeList).toEqual(claimed);
+  expect(out.collection).toEqual(claimed);
+  // the failure legs: TypeError, not a silent misroute
+  expect(out.number).toBe('TypeError');
+  expect(out['plain object']).toBe('TypeError');
+  expect(out['non-node member']).toBe('TypeError');
+});

@@ -140,8 +140,22 @@ export class Context {
     return this.registry.getMatchingTemplate(node, this.mode);
   }
 
-  // apply templates to the nodes netted by the expression (default:
-  // the current node's children). the mode is inherited from this
+  // apply templates to a node-set. the first argument is polyvalent:
+  // omitted, null, undefined, or '' nets the current node's children
+  // (unchanged); an XPath string is evaluated through select()
+  // (rewritten per the evaluation document's default namespace);
+  // a precompiled XPathExpression instance is evaluated VERBATIM
+  // against the current node — a compiled object cannot be
+  // rewritten, so the caller's own bindings are the contract (this
+  // asymmetry with the string form is deliberate: prefer the string
+  // when the default-namespace rewrite is wanted, the instance when
+  // it is not); anything with a numeric nodeType (a Node, Document,
+  // DocumentFragment, attribute) routes as a singleton; an Array,
+  // NodeList, or HTMLCollection routes as a node list; anything else
+  // throws a TypeError. this gives the XSLT document($uri) idiom a
+  // spelling — ctx.applyTemplates(ctx.document(uri)) — and lets a
+  // template body route the nodes it already holds without paying
+  // for an XPath round trip. the mode is inherited from this
   // Context unless overridden by the third argument. returns an
   // array of results — markup-mixup specs and/or DOM nodes — or
   // NULL when nothing was netted, so `applyTemplates(...) ||
@@ -152,14 +166,43 @@ export class Context {
   // no-op), and by transform()'s drop path, so DOM assembly
   // stays in `Transform.transform`.
   applyTemplates (expression, params, mode) {
-    let nodes = [];
+    let nodes = null;
     if (typeof expression === 'undefined' ||
       expression === null || expression === '')
       nodes = Array.from(this.node.childNodes);
-    else {
+    else if (typeof expression === 'string') {
       const out = this.select(expression);
       nodes = Array.isArray(out) ? out : [out];
     }
+    else if (typeof XPathExpression !== 'undefined' &&
+      expression instanceof XPathExpression) {
+      // verbatim: the caller compiled it, the caller resolves it
+      const r = expression.evaluate(this.node,
+        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      nodes = [];
+      for (let i = 0; i < r.snapshotLength; i++)
+        nodes.push(r.snapshotItem(i));
+    }
+    else if (typeof expression.nodeType === 'number')
+      nodes = [expression];
+    else if (Array.isArray(expression) ||
+      (typeof NodeList !== 'undefined' &&
+        expression instanceof NodeList) ||
+      (typeof HTMLCollection !== 'undefined' &&
+        expression instanceof HTMLCollection))
+      nodes = Array.from(expression);
+    else
+      throw new TypeError('applyTemplates(): cannot interpret ' +
+        'argument: ' + String(expression));
+
+    // every routed member must be a node — including the string
+    // path's wrapped results: a non-node-set expression result
+    // throws HERE with a clear message instead of deep inside
+    // matching (the same fail-loudly outcome, better spelled)
+    for (const n of nodes)
+      if (!n || typeof n.nodeType !== 'number')
+        throw new TypeError('applyTemplates(): not a node: ' +
+          String(n));
 
     const m = typeof mode === 'undefined' ? this.mode : mode;
     const results = [];

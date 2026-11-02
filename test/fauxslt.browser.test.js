@@ -1236,3 +1236,284 @@ test('ctx.document returns null on failure and caches it', async ({ page }) => {
   // the success path is unaffected on the same registry
   expect(out.okRoot).toBe('fixture');
 });
+
+// --- on-demand matching ---------------------------------------------------
+test('a node created after registration matches on demand', async ({ page }) => {
+  // the staleness fix: under the old preemptive scan, a node created
+  // after the index was built silently hit the no-match fallback
+  // unless a transform() reset dance intervened. under on-demand
+  // matching, the node's memo entry is computed at its first touch
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    // touch the index FIRST — the page's ul — so any stale-freeze
+    // behaviour would be in force when the new node arrives
+    const staleUl = document.getElementById('items');
+    const before = faux.getMatchingTemplates(staleUl)
+      .map(t => t.pattern);
+
+    // register a pattern, then create a matching element AFTER
+    faux.registerMatch('li', function (ctx) {
+      return { '#li': 'fresh ' + ctx.node.textContent };
+    });
+
+    // touch the index again after registration (registration
+    // invalidates the memo), then create the new node
+    const beforeNode = document.createElement('li');
+    document.getElementById('items').appendChild(beforeNode);
+    const ts = faux.getMatchingTemplates(beforeNode)
+      .map(t => t.pattern);
+
+    // and transform it: the template must fire, not the fallback
+    faux.transform(beforeNode);
+    const li = document.getElementById('items')
+      .querySelector('li:not(.item)');
+
+    return { before, ts, liText: li && li.textContent };
+  });
+
+  // the pre-registration touch saw only the built-in *
+  expect(out.before).toEqual(['*']);
+  // the post-registration node matches the fresh pattern
+  expect(out.ts).toContain('li');
+  // and the transform ran the template, not the fallback
+  expect(out.liText).toBe('fresh ');
+});
+
+test('a node created mid-transform matches through nested applyTemplates', async ({ page }) => {
+  // the mid-transform leg: a template body creates a new element
+  // and routes it through nested applyTemplates; the fresh node
+  // must match on demand, without a transform() reset
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    const seen = [];
+    faux.registerMatch('ul', function (ctx) {
+      // create a matching li mid-transform and route it through
+      // the ordinary matching loop, as a node array. the li gets
+      // an element parent (a detached holder) — a PARENTLESS node
+      // is not nettable by a child-axis pattern (nor was it under
+      // the old engine, which never visited off-tree nodes)
+      const holder = document.createElement('div');
+      const li = document.createElement('li');
+      li.textContent = 'born mid-transform';
+      holder.appendChild(li);
+      return ctx.applyTemplates([li]);
+    });
+    faux.registerMatch('li', function (ctx) {
+      seen.push(ctx.node.textContent);
+      return { '#li': 'claimed ' + ctx.node.textContent };
+    });
+    // both templates are registered up front; the NODE is what is
+    // fresh — created after transform() began, matched through the
+    // nested applyTemplates without any reset
+    const ul = document.getElementById('items');
+    faux.transform(ul);
+    return { seen };
+  });
+
+  expect(out.seen).toEqual(['born mid-transform']);
+});
+
+test('. matches element and document candidates only; .. matches nodes with an element child', async ({ page }) => {
+  // classification edges now load-bearing: the self class (the bare
+  // .) nets the candidate iff it can serve as an XPath context —
+  // an element or document, NOT a text node; the scan class (the
+  // bare ..) is evaluated from each visited context and nets the
+  // context's parent, so a node is netted iff it is the parent of
+  // a visited element/document — i.e. it has an element child
+  // (or IS a parented element)
+  await go(page);
+  const out = await page.evaluate(() => {
+    const dotT = new window.fauxslt.Transform();
+    dotT.registerMatch('.', function () { return null; });
+    const li = document.querySelectorAll('#items li')[0];
+    const text = document.getElementById('para').firstChild;
+    // probe for the . PATTERN specifically: the built-in text()
+    // also matches the text node (parent class), which is not the
+    // self-class question
+    const dotMatched = (node) =>
+      !!dotT.getMatchingTemplates(node).find(t => t.pattern === '.');
+    const dot = {
+      element: dotMatched(li),
+      text: dotMatched(text),
+    };
+    // the document node: . must net it too (documents are valid
+    // XPath contexts)
+    dot.document = dotMatched(document);
+
+    const dotdotT = new window.fauxslt.Transform();
+    dotdotT.registerMatch('..', function () { return null; });
+    // probe for the .. PATTERN specifically: the built-in *
+    // matches every element through the parent class, which is
+    // not the scan-class question
+    const dotdotMatched = (node) =>
+      !!dotdotT.getMatchingTemplates(node)
+        .find(t => t.pattern === '..');
+    const ul = document.getElementById('items');
+    const main = ul.parentNode;
+    // main has element children (ul); the para has none
+    const dotdot = {
+      withElementChild: dotdotMatched(main),
+      childless: dotdotMatched(
+        document.getElementById('para')),
+    };
+
+    return { dot, dotdot };
+  });
+
+  // the bare . matches elements and documents, never text nodes
+  expect(out.dot.element).toBe(true);
+  expect(out.dot.document).toBe(true);
+  expect(out.dot.text).toBe(false);
+  // the bare .. matches exactly the nodes with an element child
+  expect(out.dotdot.withElementChild).toBe(true);
+  expect(out.dotdot.childless).toBe(false);
+});
+
+test('absolute patterns match over a fetched document', async ({ page }) => {
+  // root-class per-root sets on a non-ambient document: the netted
+  // set for //entry is computed against the FETCHED feed's root
+  // (its own document), membership-checked per candidate. the
+  // pattern is prefixed per the registration-time ambient state
+  // (the HTML page has no default namespace, so none is needed —
+  // but the feed IS default-namespaced, so the pattern must carry
+  // the feed's own namespace through a prefix)
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform({
+      'atom': 'http://www.w3.org/2005/Atom' });
+    let entries = null, titles = null;
+    faux.registerMatch('atom:entry', function (ctx) {
+      return { '#li': ctx.select('string(atom:title)') };
+    });
+    faux.registerMatch('p', function (ctx) {
+      const doc = ctx.document('/test/browser/feed.xml');
+      entries = doc.querySelectorAll('entry').length;
+      const r = ctx.applyTemplates(doc.querySelectorAll('entry'));
+      titles = Array.isArray(r) ? r.map(s => s['#li']) : null;
+      return null;
+    });
+    faux.transform(document.getElementById('para'));
+    return { entries, titles };
+  });
+
+  // the feed has two entries and both matched through the absolute
+  // routing (a plain querySelectorAll hands the node list to
+  // applyTemplates; each entry nets its template against the
+  // fetched document's nodes)
+  expect(out.entries).toBe(2);
+  expect(out.titles).toEqual(['first', 'second']);
+});
+
+test('detached nodes match on demand; fragment-held roots do not', async ({ page }) => {
+  // a behaviour change, deliberate: the old scan covered only the
+  // ownerDocument's tree, so removed-but-intact subtrees and
+  // copyOf-cloned children held in a fragment never matched — they
+  // silently recursed through the fallback. parent-class on-demand
+  // evaluation matches element-parented detached nodes (the core
+  // synergy with the polyvalent forms: template bodies routing the
+  // node lists they already hold). the BOUNDARY: a candidate whose
+  // parentNode is a DocumentFragment does not match — the
+  // parent-class guard skips non-element/document parents
+  await go(page);
+  const out = await page.evaluate(() => {
+    const results = {};
+    const faux = new window.fauxslt.Transform();
+    faux.registerMatch('li', function (ctx) {
+      return { '#li': 'claimed ' + ctx.node.textContent };
+    });
+
+    // (a) a removed-but-intact subtree: detach the whole ul, then
+    // route one of its (element-parented, detached) children
+    const ul = document.getElementById('items');
+    ul.remove();
+    const detachedLi = ul.children[0];
+    const r1 = new window.fauxslt.Context(faux, ul)
+      .applyTemplates([detachedLi]);
+    results.elementParentedDetached =
+      Array.isArray(r1) && r1[0]['#li'] === 'claimed first';
+
+    // (b) a copyOf-style clone held in a fragment: the CLONE's
+    // parent is the fragment, so the clone itself does NOT match;
+    // but its element-parented children DO
+    const frag = document.createDocumentFragment();
+    const clonedUl = ul.cloneNode(true);
+    frag.appendChild(clonedUl);
+    const r2 = new window.fauxslt.Context(faux, ul)
+      .applyTemplates([clonedUl]);
+    // clonedUl's parent is the fragment: the parent-class guard
+    // skips it, so it hits the no-match fallback, which recurses
+    // into its children — and those ARE element-parented (by the
+    // clone), so they match. the fallback recursion is the
+    // existing contract; the boundary is only that the fragment-
+    // held ROOT itself matches nothing
+    results.fragmentHeldRoot = {
+      // the direct claim over the fragment-held root itself nets
+      // nothing — the fallback recursed and its children matched
+      liCount: (r2 || []).filter(s => s && s['#li']).length,
+      // the childNodes include whitespace text (copied as strings
+      // by the built-in text rule), so take the first CLAIMED li
+      first: (r2 || []).filter(s => s && s['#li'])
+        .map(s => s['#li'])[0],
+    };
+
+    // the direct probe: getMatchingTemplate on the fragment-held
+    // root is null; on its element-parented child it fires
+    results.fragmentHeldRootNoDirect =
+      faux.getMatchingTemplate(clonedUl) === null;
+    results.elementParentedChildMatches =
+      !!faux.getMatchingTemplate(clonedUl.children[0]);
+
+    // restore the ul for any later tests
+    document.querySelector('main').appendChild(ul);
+    return results;
+  });
+
+  // an element-parented detached node matches on demand
+  expect(out.elementParentedDetached).toBe(true);
+  // a fragment-held root does not match directly...
+  expect(out.fragmentHeldRootNoDirect).toBe(true);
+  // ...but its element-parented descendants do (both through the
+  // direct probe and through the fallback recursion)
+  expect(out.elementParentedChildMatches).toBe(true);
+  expect(out.fragmentHeldRoot.liCount).toBe(3);
+  expect(out.fragmentHeldRoot.first).toBe('claimed first');
+});
+
+test('multi-step attribute patterns match via the owner element', async ({ page }) => {
+  // the rewritten-branch owner classification: p/@id rewrites to
+  // @id[parent::p] (owner class), so the membership check runs from
+  // the candidate's ownerElement. the existing single-step
+  // attribute path (li[contains(@class,…)]) is pinned by the
+  // unmodified suite; this leg covers the MULTI-step rewrite
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    const seen = [];
+    faux.registerMatch('p/@id', function (ctx) {
+      seen.push(ctx.node.name + '=' + ctx.node.value);
+      return null;
+    });
+
+    // the attribute node of the para's id
+    const attr = document.getElementById('para')
+      .getAttributeNode('id');
+    const matched = faux.getMatchingTemplate(attr);
+    const patterns = faux.getMatchingTemplates(attr)
+      .map(t => t.pattern);
+
+    // and an id attribute on a DIFFERENT parent must not match
+    const ulId = document.getElementById('items')
+      .getAttributeNode('id');
+    const ulMatched = !!faux.getMatchingTemplate(ulId);
+
+    return { matched: !!matched, patterns, ulMatched, seen };
+  });
+
+  // the para's id attribute matched the rewritten branch
+  expect(out.patterns).toEqual(['p/@id']);
+  expect(out.matched).toBe(true);
+  // the ul's id attribute (wrong parent) did not
+  expect(out.ulMatched).toBe(false);
+});

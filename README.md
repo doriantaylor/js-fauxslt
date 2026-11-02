@@ -249,12 +249,11 @@ Two deliberate divergences from §5.8:
   for elements, drop for text) rather than a mode-local built-in.
   A user wanting built-ins in a mode registers their own
   `*`/`text()`/etc. there — the ordinary registration path.
-- **Document nodes are reachable only by absolute patterns.** The
-  matching engine nets nodes from each visited element/document as
-  context, so a document node is only ever netted by an absolute
-  pattern. The built-in `/` (+0.5) outranks lower-priority absolute
-  node tests such as `//node()` (−0.5) there — registering `/`
-  is the override.
+- **Document nodes are reachable only by absolute patterns.** A
+  document node has no parent, so no parent-class pattern can net
+  it; only an absolute pattern does. The built-in `/` (+0.5)
+  outranks lower-priority absolute node tests such as `//node()`
+  (−0.5) there — registering `/` is the override.
 
 Note that `transform(documentNode)` is unsupported:
 `markup-mixup`'s replace requires the target to have a parent node.
@@ -263,14 +262,32 @@ The `/` rule is reachable via `applyTemplates` over document-valued
 
 ### Node Test Patterns
 
-Because the matching engine evaluates each pattern with each
-element or document as *context* and records every node it nets,
-node test patterns (`text()`, `comment()`,
-`processing-instruction()`) and attribute patterns (`@attr`) match
-genuinely: the netted node is the one the template runs against.
-Predicated node tests (`text()[normalize-space(.)='x']`) evaluate
-natively in the same scan. DocumentType nodes are never netted by
-any XPath node test and always fall to the fallback.
+Matching is on demand: for each candidate node, FauXSLT
+evaluates each pattern against the single context that can net
+it — the candidate's parent for child-axis tests (bare names,
+`text()`, `comment()`, `processing-instruction(…)`, and the
+rewritten ancestry forms), its owner element for attribute tests
+(`@attr`, `a/@attr`), and the candidate itself for the bare `.`
+(elements and documents only). Absolute patterns (`/doc/body`,
+`//entry`, `id('x')`) are evaluated once per document and
+membership-checked per candidate. Node test patterns and attribute
+patterns therefore match genuinely: the netted node is the one the
+template runs against, and predicated node tests
+(`text()[normalize-space(.)='x']`) evaluate natively. DocumentType
+nodes are never netted by any XPath node test and always fall to
+the fallback.
+
+Matches are memoized per node, and the memo is dropped at the start
+of every `transform()` and on every registration — so a node
+created *after* registration (or mid-transform, then routed through
+a nested `applyTemplates`) matches on demand, with no reset dance.
+Work is proportional to the nodes actually matched, not the whole
+document: a document fetched through `ctx.document()` costs nothing
+until its nodes are matched. Detached nodes with an element parent
+match on demand too; a candidate whose parent is a
+`DocumentFragment` does not (its element-parented descendants do).
+The rare upward-netting forms (the bare `..`, `a/..`-style tails)
+are matched by a per-document scan, exactly as before.
 
 ### No-Match Fallback
 

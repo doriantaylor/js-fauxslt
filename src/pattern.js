@@ -103,6 +103,54 @@ function rewriteBranch (branch) {
   return rewritten;
 }
 
+// classify an elementary branch for the on-demand matching engine:
+// the single context node a candidate's membership check must be
+// evaluated from. computed at compile time, from the REWRITTEN
+// branch AST — the rewrite collapses every multi-step child-axis
+// branch to a single step, so the class falls out of the final
+// step's shape:
+//
+// * 'root'  — absolute branches (…, //…, id('…')): netted once
+//   per root, membership-checked per candidate
+// * 'self'  — the bare `.`: evaluated from the candidate itself
+//   (nets it iff it can serve as an XPath context: an element or
+//   document)
+// * 'owner' — final step on the attribute axis (@href, or a/@x
+//   rewritten to @x[parent::a]): evaluated from the candidate's
+//   ownerElement
+// * 'parent'— final step on the child axis (the overwhelming
+//   majority: bare names, text(), comment(), every rewritten
+//   multi-step branch): evaluated from the candidate's parentNode
+// * 'scan'  — upward-netting leftovers rewriteBranch leaves
+//   verbatim (the bare .., a/.., a/.-style tails): brute-force
+//   netted set per root, per the old walk, scan-class branches
+//   only
+//
+// the derivation: a rewritten branch's expression, evaluated from
+// a context C, nets only filtered children (or attributes) of C —
+// predicates filter, they never widen netting — so the only
+// context that can net candidate N is N's parent (child-axis
+// tail), N's owner element (attribute tail), or N itself (self
+// tail). absolute branches net from the root; the scan class keeps
+// correct-by-construction brute force for the rare forms that net
+// upward (… and a/. net the context's parent / the context itself
+// from a non-parent context, so no single-context rule holds).
+function classifyBranch (branch, absolute) {
+  // id()/key() and every absolute path are root-class. the flag
+  // comes from the ORIGINAL branch (isAbsolute): the rewritten AST
+  // does not carry it
+  if (absolute) return 'root';
+  if (branch.type !== 'path') return 'root';
+  const steps = branch.steps || [];
+  if (!steps.length) return 'root';
+  const last = steps[steps.length - 1];
+  if (steps.length === 1 && last.type === 'self') return 'self';
+  if (last.type === 'step' && last.axis === 'attribute')
+    return 'owner';
+  if (last.type === 'step') return 'parent';
+  return 'scan';
+}
+
 // compile a pattern: validate syntax, reject key(), rewrite unprefixed
 // element name tests to the rewrite prefix (`opts.prefix`, e.g. the
 // synthetic DEFAULT_PREFIX `_` — or nothing, per the falsy default:
@@ -145,11 +193,15 @@ export function compilePattern (expr, opts = {}) {
     // introduced by the rewrite must not inflate it
     const priority = computePriority(b);
     const rewritten = rewriteBranch(b);
+    const absolute = isAbsolute(b);
     return {
       expr: serializePattern(rewritten),
       evalExpr: serializePattern(rewritten),
       priority,
-      absolute: isAbsolute(b),
+      absolute,
+      // the on-demand matching class (see classifyBranch): which
+      // single context a candidate's membership check runs from
+      match: classifyBranch(rewritten, absolute),
       ast: rewritten,
     };
   });

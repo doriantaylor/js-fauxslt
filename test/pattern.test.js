@@ -232,3 +232,43 @@ test('compilePattern: / parses as the root pattern', () => {
   // or a tie-won re-registration
   assert.equal(c.branches[0].priority, 0.5);
 });
+
+// --- on-demand matching classification --------------------------------
+// each elementary branch carries the class of the single context its
+// membership check runs from (see pattern.js's classifyBranch). the
+// classification is pure compile-time logic over the REWRITTEN AST
+const match = (expr, expected, opts) => () => {
+  const c = compilePattern(expr, opts);
+  assert.equal(c.branches.length, 1);
+  assert.equal(c.branches[0].match, expected);
+};
+
+test('classifies: bare name → parent', match('foo', 'parent'));
+test('classifies: rewritten multi-step → parent',
+  match('a/b', 'parent'));
+test('classifies: deep multi-step → parent', match('a/b//c', 'parent'));
+test('classifies: node type test → parent', match('text()', 'parent'));
+test('classifies: predicated name → parent', match('a[1]', 'parent'));
+test('classifies: leading ./ step → parent (rewritten)',
+  match('./foo', 'parent'));
+test('classifies: leading ../ step → parent (rewritten)',
+  match('../foo', 'parent'));
+test('classifies: attribute → owner', match('@x', 'owner'));
+test('classifies: rewritten attribute tail → owner',
+  match('a/@x', 'owner'));
+test('classifies: bare . → self', match('.', 'self'));
+test('classifies: bare .. → scan', match('..', 'scan'));
+test('classifies: parent-tailed multi-step → scan',
+  match('a/..', 'scan'));
+test('classifies: self-tailed multi-step → scan',
+  match('a/.', 'scan'));
+test('classifies: absolute path → root', match('//x', 'root'));
+test('classifies: rooted path → root', match('/doc/x', 'root'));
+test('classifies: bare root → root', match('/', 'root'));
+test('classifies: id() → root', match("id('x')", 'root'));
+
+test('classifies each union branch independently', () => {
+  const c = compilePattern('foo | @x | . | ..');
+  assert.deepEqual(c.branches.map(b => b.match),
+    ['parent', 'owner', 'self', 'scan']);
+});

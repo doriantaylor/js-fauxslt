@@ -45,53 +45,64 @@
   could easily derive from there (eg mode, priority) which template to
   apply.
 
-  To deal with unbound nodes, document fragments, etc, we will also
-  wrap that aforementioned `WeakMap` in another one keyed on the root
-  (eg `document`), so the ultimate form of this structure (we can call
-  it `#nodeMatches`) will be `WeakMap(root, WeakMap(node,
-  Set(templates)))`.
+  The registry memoizes matches per node — `WeakMap(node,
+  Set(templates))`, called `#matches` — computed ON DEMAND rather
+  than by a preemptive whole-tree scan. The pattern rewriting
+  (see `Template` and `pattern.js`) is what makes on-demand
+  matching possible: a rewritten branch's expression, evaluated
+  from a context C, nets only filtered children (or attributes)
+  of C — predicates filter, they never widen netting — so for a
+  candidate node exactly ONE context can net it, and that context
+  is classifiable at compile time from the branch's final step
+  (see `classifyBranch` in `pattern.js`):
 
-  We will then need a private method (something like `#walk`) that
-  invokes the algorithm to populate these maps, which can be lazy and
-  run at the beginning of `transform`:
+  * `root` — absolute branches (`/…`, `//…`, `id('…')`): the
+    netted set is evaluated once per root per call (memoized in
+    `#rootSets`) and membership-checked per candidate
+  * `self` — the bare `.` pattern: evaluated from the candidate
+    itself, which nets it iff it can serve as an XPath context
+    (an element or document)
+  * `owner` — a final step on the attribute axis (`@href`, and
+    `a/@href` rewritten to `@href[parent::a]`): evaluated from
+    the candidate's `ownerElement`
+  * `parent` — a final step on the child axis (the overwhelming
+    majority: bare names, `text()`, `comment()`,
+    `processing-instruction(…)`, every rewritten multi-step
+    branch): evaluated from the candidate's `parentNode` — which
+    is the old parent-as-context scan's property, preserved:
+    text, comment, PI, and attribute nodes are still netted from
+    their parents and remain genuinely matchable
+  * `scan` — the leftovers whose netting escapes the ancestor
+    chain: the bare `..`, or multi-step branches ending in a
+    self/parent step that the rewrite leaves verbatim (`a/..`,
+    `a/.`-style tails). These keep a per-root netted set computed
+    by a walk over the root's tree — but ONLY over the
+    scan-class strings, and memoized per root per call. (The
+    rewrite postdates the old whole-tree scan; the scan survives
+    only for these rare upward-netting forms.)
 
-  * iterate over each of the registered match templates
-  * extract their rewritten expressions (see `Template`)
-  * create an intermediate structure of the form { xpathString:
-    [compiledExpr, Set(matchingTemplates)] }
-    * (use a plain object to deduplicate the expressions)
-    * (since there will be multiple copies of the same compiled
-      expression which will be semantically identical but have
-      different identities, just use the first one encountered)
-    * once compiled-expression → template relations have been
-      collated, transform the object values into a `Map`
-      * set aside the absolute and the `id()` paths
-      * (these structures can stick around until a new template is registered)
+  `getMatchingTemplates(node, mode?)` therefore computes the
+  matching set for a node in one pass over the collated index
+  (absolutes first, then the collated Map in registration order —
+  reproducing the retired scan's Set insertion order exactly, so
+  the stable priority sort keeps first-registered-wins ties),
+  dispatching each collated entry to its class's context, then
+  filters by mode and sorts by priority. The per-node memo is
+  dropped at the start of every `transform()` (the DOM mutates
+  during transforms) and on every registration — the same reset
+  contract the old per-root index had, but strictly fresher:
+  each node's entry is computed at its first touch, so nodes
+  created mid-transform (or after a registration) match
+  correctly, where the old engine silently missed them.
 
-  Now we can consider the actual algorithm to populate `#nodeMatches`:
-
-  * begin at the root (document or fragment) and scan its children
-    * (unbound elements will probably need to be provisionally bound
-      to a `DocumentFragment` or something)
-    * if the node is a document, test the absolute expressions
-    * if the node is the root (not necessarily a document), test the
-      `id()` expressions
-    * at each visited ELEMENT or DOCUMENT, evaluate each collated
-      expression in NODE-SET mode with the visited node as CONTEXT,
-      and record every netted node in `#nodeMatches` (the
-      parent-as-context scan). the context node is always an
-      element or document — the only kinds the DOM XPath API
-      accepts as context — so nodes the XPath API refuses as
-      context nodes (text, comment, PI, attribute) are netted from
-      their PARENTS and become genuinely matchable: `text()`,
-      `comment()`, `processing-instruction()`, and `@attr` are
-      ordinary matchable patterns.
-    * recurse into each visited node's children (all kinds), so
-      every element and document in the tree serves as context
-      exactly once
-
-  (That might be amenable to being async but we probably want to await
-  it before we actually test anything against it.)
+  A corollary: cost is proportional to the nodes actually
+  matched, not the whole document — a fetched `document()` costs
+  nothing until its nodes are matched, and then only per
+  candidate. Another: detached nodes with an element parent match
+  on demand (the old walk covered only the ownerDocument's tree);
+  a candidate whose `parentNode` is a DocumentFragment still
+  does not match, since the parent-class guard requires an
+  element/document parent.
 
   Built-in template rules (XSLT 1.0 §5.8) are installed in the
   constructor and ONLY in the constructor, as ordinary registered
@@ -168,7 +179,8 @@ const qualifiedName = (node) =>
 export class Transform {
 
     // see the constructor comments for what these hold
-    #nodeMatches;
+    #matches;
+    #rootSets;
     #collated;
     #collatedAbsolute;
     #expressions;
@@ -368,11 +380,20 @@ export class Transform {
         this.registerMatch('processing-instruction()', identity ?
             Transform.#identityPI : Transform.#builtinPI);
 
-        // the node-match index, per spec: WeakMap(root, WeakMap(node,
-        // Set(templates))), populated lazily by #walk at the beginning
-        // of transform(). keyed by root so unbound nodes, document
-        // fragments, and multiple documents each get their own index.
-        this.#nodeMatches = new WeakMap();
+        // the per-node match memo: WeakMap(node, Set(templates)),
+        // computed on demand per candidate (see the class comment
+        // for the on-demand matching design) and dropped at the
+        // start of every transform() and on every registration —
+        // transforms mutate the DOM, so first-touch freshness is
+        // the staleness contract
+        this.#matches = new WeakMap();
+
+        // netted sets for root- and scan-class branches:
+        // WeakMap(root, Map(exprString, Set(nodes))). root-class
+        // sets are computed once per root per call; scan-class sets
+        // (the .. forms) walk the root's tree per the retired
+        // #walk's algorithm, over scan-class expressions only
+        this.#rootSets = new WeakMap();
 
         // collated compiled expressions for the scan: Map of
         // xpath-string -> { expr, templates: Set(Template) }, built
@@ -446,6 +467,10 @@ export class Transform {
 
         // the collated expression index is stale: rebuild on demand
         this.#collated = null;
+        // the memos are stale too: a new template changes what any
+        // node matches
+        this.#matches = new WeakMap();
+        this.#rootSets = new WeakMap();
         return t;
     }
 
@@ -557,10 +582,13 @@ export class Transform {
 
     // collate the registered match templates into a compiled
     // expression index: Map of expression string ->
-    // { string, templates: Set(Template) }, deduplicating
+    // { string, templates: Set(Template), match }, deduplicating
     // semantically identical expressions (the first Template's
-    // compiled copy is canonical). absolute and id() branches are set
-    // aside for root testing. rebuilt lazily after any registration.
+    // compiled copy is canonical; templates sharing a string share
+    // its classification, since identical rewritten expressions
+    // have identical shape). absolute and id() branches are set
+    // aside for root testing. rebuilt lazily after any
+    // registration.
     #collate () {
         if (this.#collated) return this.#collated;
         const byString = new Map();
@@ -576,7 +604,8 @@ export class Transform {
                 }
                 let entry = byString.get(string);
                 if (!entry) {
-                    entry = { string, templates: new Set() };
+                    entry = { string, templates: new Set(),
+                        match: b.match };
                     byString.set(string, entry);
                 }
                 entry.templates.add(t);
@@ -587,71 +616,96 @@ export class Transform {
         return byString;
     }
 
-    // populate #nodeMatches for a root, per the spec's algorithm:
-    // walk the tree from the root and, at each visited ELEMENT or
-    // DOCUMENT, evaluate every collated expression in NODE-SET mode
-    // with the visited node as CONTEXT, recording every netted node
-    // (the parent-as-context scan). the context is always an element
-    // or document — the only kinds the DOM XPath API accepts — so
-    // patterns netting text, comment, PI, or attribute nodes are
-    // evaluated from each node's parent and the match is recorded
-    // against the netted node itself. this makes node-test patterns
-    // (text(), comment(), processing-instruction()) and attribute
-    // patterns (@attr) genuinely matchable. most rewritten
-    // expressions net each node exactly once (at its parent);
-    // branches left unrewritten (self/parent-tailed multi-step
-    // patterns) may net a node from several ancestors — the Set
-    // dedupes per node, so the cost is bounded, not the netting.
-    // absolute and id() branches are tested once against the root.
-    #walk (root) {
-        if (this.#nodeMatches.has(root))
-            return this.#nodeMatches.get(root);
+    // the netted set for a root- or scan-class expression, cached
+    // per root per call: WeakMap(root, Map(exprString, Set)) —
+    // WeakMap values cannot hold primitives, so the inner Map
+    // carries the exprString → Set entries. root-class sets are
+    // evaluated once against the root; scan-class sets (the rare
+    // upward-netting .. forms) are computed by walking the root's
+    // tree, at each visited element/document evaluating ONLY the
+    // scan-class expressions, per the retired preemptive scan's
+    // algorithm — correct by construction for the forms whose
+    // netting escapes the ancestor chain
+    #rootSet (root, string, scanStrings) {
+        let byExpr = this.#rootSets.get(root);
+        if (!byExpr) {
+            byExpr = new Map();
+            this.#rootSets.set(root, byExpr);
+        }
+        if (byExpr.has(string)) return byExpr.get(string);
 
-        const byNode = new WeakMap();
-        this.#nodeMatches.set(root, byNode);
+        const set = new Set();
+        if (scanStrings) {
+            // scan class: visit every element/document in the
+            // root's tree as context, netting only this expression
+            const visit = (node) => {
+                if (node.nodeType === 1 || node.nodeType === 9)
+                    for (const n of this.#evaluateNodes(string, node))
+                        set.add(n);
+                if (node.childNodes)
+                    for (const child of node.childNodes) visit(child);
+            };
+            visit(root);
+        }
+        else
+            for (const n of this.#evaluateNodes(string, root))
+                set.add(n);
+        byExpr.set(string, set);
+        return set;
+    }
+
+    // compute the matching set for a node in ONE pass over the
+    // collated index, in INSERTION ORDER — #collatedAbsolute first,
+    // then the #collate Map in registration order — which
+    // reproduces the retired scan's Set insertion order exactly, so
+    // the stable priority sort keeps first-registered-wins ties as
+    // a delivered invariant, not a class-order accident
+    #computeMatches (node) {
+        const set = new Set();
+
+        // root class: netted once per root, membership-checked
+        const root = node.ownerDocument || node;
+        for (const { string, template } of this.#collatedAbsolute)
+            if (this.#rootSet(root, string).has(node))
+                set.add(template);
 
         const byString = this.#collate();
-
-        // record a match
-        const record = (node, t) => {
-            let set = byNode.get(node);
-            if (!set) {
-                set = new Set();
-                byNode.set(node, set);
+        for (const entry of byString.values()) {
+            // dispatch by the branch's classification: the single
+            // context the membership check runs from
+            const cls = entry.match;
+            if (cls === 'parent') {
+                // child-axis tail: the only context that can net
+                // the candidate is its parent (an XPath-acceptable
+                // one, or nothing)
+                const p = node.parentNode;
+                if (p && (p.nodeType === 1 || p.nodeType === 9) &&
+                    this.#evaluateNodes(entry.string, p)
+                        .includes(node))
+                    for (const t of entry.templates) set.add(t);
             }
-            set.add(t);
-        };
-
-        // absolute and id() branches net their nodes from the root
-        for (const { string, template } of this.#collatedAbsolute)
-            for (const n of this.#evaluateNodes(string, root))
-                record(n, template);
-
-        // visit every node in document order, evaluating each
-        // collated expression with each visited ELEMENT or DOCUMENT
-        // as context and recording every node it nets: XPath 1.0
-        // only accepts documents and elements as context nodes, so
-        // text, comments, etc. cannot serve as context — but they
-        // are netted from their parents, which is what makes them
-        // matchable. all nodes are still visited so their element
-        // children are reached.
-        const visit = (node) => {
-            const testable = node.nodeType === 1 || node.nodeType === 9;
-            if (testable) {
-                for (const entry of byString.values())
-                    for (const n of
-                        this.#evaluateNodes(entry.string, node))
-                        for (const t of entry.templates) record(n, t);
+            else if (cls === 'owner') {
+                // attribute tail: the candidate's ownerElement
+                if (node.nodeType === 2 && node.ownerElement &&
+                    this.#evaluateNodes(entry.string,
+                        node.ownerElement).includes(node))
+                    for (const t of entry.templates) set.add(t);
             }
-            if (node.childNodes)
-                for (const child of node.childNodes) visit(child);
-        };
-        // begin at the root: unbound elements are provisionally
-        // bound to the root they were reached through (fragments
-        // included)
-        visit(root);
-
-        return byNode;
+            else if (cls === 'self') {
+                // the bare .: the candidate itself, iff it can
+                // serve as an XPath context (element or document)
+                if ((node.nodeType === 1 || node.nodeType === 9) &&
+                    this.#evaluateNodes(entry.string, node)
+                        .includes(node))
+                    for (const t of entry.templates) set.add(t);
+            }
+            else {
+                // scan class: the per-root brute-force set
+                if (this.#rootSet(root, entry.string, true).has(node))
+                    for (const t of entry.templates) set.add(t);
+            }
+        }
+        return set;
     }
 
     // array of matching templates for a node in a mode (null for
@@ -661,10 +715,12 @@ export class Transform {
     // ties. per XSLT 1.0 §5.4, a template only applies in its
     // own mode: no fallback to default-mode templates.
     getMatchingTemplates (node, mode = null) {
-        const root = node.ownerDocument || node;
-        const byNode = this.#walk(root);
-        const set = byNode.get(node);
-        if (!set || !set.size) return [];
+        let set = this.#matches.get(node);
+        if (!set) {
+            set = this.#computeMatches(node);
+            this.#matches.set(node, set);
+        }
+        if (!set.size) return [];
         return Array.from(set)
             .filter(t => t.mode === mode)
             .sort((a, b) => b.getPriority() - a.getPriority());
@@ -687,7 +743,8 @@ export class Transform {
     // MARKUP alone would leave the original in place, since it
     // bails on empty specs.
     transform (node, params, mode = null) {
-        this.#nodeMatches = new WeakMap();
+        this.#matches = new WeakMap();
+        this.#rootSets = new WeakMap();
 
         const ctx  = new Context(this, node, params, mode);
         const spec = ctx.applyTemplates('self::node()', null, mode);

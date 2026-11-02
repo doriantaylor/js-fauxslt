@@ -1132,8 +1132,11 @@ test('applyTemplates takes a polyvalent first argument', async ({ page }) => {
     results.string = texts(ctx.applyTemplates('li'));
 
     // (3) XPathExpression instance — VERBATIM: no rewrite, the
-    // caller's expression is the contract (li is namespace-less
-    // here, so no rewrite is needed to match)
+    // caller's expression is the contract. `li` here is
+    // namespace-less in the HTML page, so this leg pins the
+    // ROUTING; the verbatim asymmetry itself is pinned by the
+    // XHTML leg in the test below (where the rewrite is what makes
+    // the string form match and the instance cannot)
     const expr = document.createExpression('li', null);
     results.instance = texts(ctx.applyTemplates(expr));
 
@@ -1182,6 +1185,64 @@ test('applyTemplates takes a polyvalent first argument', async ({ page }) => {
   expect(out['non-node member']).toBe('TypeError');
 });
 
+test('applyTemplates: string form rewrites, XPathExpression form is verbatim', async ({ page }) => {
+  // the deliberate asymmetry, discriminated: on a default-
+  // namespaced (XHTML) document the STRING form is rewritten
+  // (`li` → `_:li`, resolved against the document's default
+  // namespace) and matches, while a precompiled instance is
+  // evaluated VERBATIM — `li` with an empty-prefix-resolving
+  // resolver nets nothing, because XPath 1.0 never consults the
+  // default namespace. an instance that resolves the prefix does
+  // match
+  await page.route('**/test/browser/xhtml-page.html', async route => {
+    const resp = await route.fetch();
+    const headers = resp.headers();
+    headers['content-type'] = 'application/xhtml+xml';
+    await route.fulfill({ response: resp, headers });
+  });
+  await page.goto('/test/browser/xhtml-page.html');
+  await page.addScriptTag({ type: 'module', url: '/test/browser/init.js' });
+  await page.waitForFunction('window.__ready === true');
+
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    faux.registerMatch('li', function (ctx) {
+      return { '#li': 'claimed: ' + ctx.node.textContent };
+    });
+    // a context on the xhtml document's ul: its li children are
+    // namespaced (the root's default namespace), so an UNrewritten
+    // `li` test nets nothing
+    const ctx = new window.fauxslt.Context(faux,
+      document.getElementById('items'));
+
+    // the string form: rewritten per the document's default
+    // namespace, nets the (namespaced) children
+    const viaString = ctx.applyTemplates('li');
+
+    // a verbatim instance with an empty-prefix resolver: XPath
+    // never consults the default namespace, so it nets NOTHING
+    const verbatim = document.createExpression('li', () => null);
+    const viaInstance = ctx.applyTemplates(verbatim);
+
+    return {
+      contentType: document.contentType,
+      isXHTML: !!document.documentElement.namespaceURI,
+      stringCount: viaString ? viaString.length : 0,
+      instanceResult: viaInstance,
+    };
+  });
+
+  // sanity: the page really is XML-parsed XHTML (default
+  // namespace in effect)
+  expect(out.contentType).toBe('application/xhtml+xml');
+  expect(out.isXHTML).toBe(true);
+  // the string form matched (the rewrite is load-bearing)
+  expect(out.stringCount).toBeGreaterThan(0);
+  // the verbatim instance netted nothing — strict null, not a
+  // throw and not the rewritten result
+  expect(out.instanceResult).toBeNull();
+});
+
 test('ctx.document returns null on failure and caches it', async ({ page }) => {
   // the null contract: a transport failure and a malformed payload
   // both return null (not a throw), and the null is CACHED — one
@@ -1216,11 +1277,17 @@ test('ctx.document returns null on failure and caches it', async ({ page }) => {
     const m1 = ctx.document('/malformed.xml');
     const m2 = ctx.document('/malformed.xml');
 
+    // a connection-level failure (unroutable port): throws from
+    // xhr.send() before any status exists — same null contract,
+    // same caching
+    const n1 = ctx.document('http://localhost:1/nope.xml');
+    const n2 = ctx.document('http://localhost:1/nope.xml');
+
     // and the SUCCESS path still works on the same registry
     const ok = ctx.document('/test/browser/fixture.xml');
 
     return {
-      d1, d2, m1, m2,
+      d1, d2, m1, m2, n1, n2,
       okRoot: ok && ok.documentElement.tagName,
     };
   });
@@ -1231,6 +1298,9 @@ test('ctx.document returns null on failure and caches it', async ({ page }) => {
   // malformed payload: null on both calls
   expect(out.m1).toBeNull();
   expect(out.m2).toBeNull();
+  // connection-level failure: null too, not a NetworkError
+  expect(out.n1).toBeNull();
+  expect(out.n2).toBeNull();
   // one GET per URI: the 404 route fired exactly once
   expect(fetches).toBe(1);
   // the success path is unaffected on the same registry
@@ -1404,6 +1474,52 @@ test('absolute patterns match over a fetched document', async ({ page }) => {
   // fetched document's nodes)
   expect(out.entries).toBe(2);
   expect(out.titles).toEqual(['first', 'second']);
+});
+
+test('absolute patterns match on a cold registry first touch', async ({ page }) => {
+  // regression: #computeMatches used to run the root-class pass
+  // before #collate() populated #collatedAbsolute, so the FIRST
+  // compute on a registry missed every absolute pattern (the
+  // per-node memo then froze the empty set). the probes here are
+  // all cold first touches
+  await go(page);
+  const out = await page.evaluate(() => {
+    // (a) a cold registry: register an absolute pattern, then
+    // FIRST-touch a matching node
+    const faux = new window.fauxslt.Transform();
+    faux.registerMatch('//li', function () { return null; });
+    const li = document.querySelectorAll('#items li')[0];
+    const cold = faux.getMatchingTemplates(li)
+      .map(t => t.pattern);
+
+    // (b) the built-in / is a root-class pattern: a cold registry
+    // must net it for the document node on first touch
+    const faux2 = new window.fauxslt.Transform();
+    const docNode = faux2.getMatchingTemplates(document)
+      .map(t => t.pattern);
+
+    // (c) re-registration of an absolute pattern: the new template
+    // must be what a fresh node's first touch nets (a stale
+    // absolutes list served the overwritten one). probe by body
+    // identity — the registry keeps no name to compare by
+    const faux3 = new window.fauxslt.Transform();
+    const bodyA = function () { return null; };
+    const bodyB = function () { return null; };
+    faux3.registerMatch('//p', bodyA);
+    faux3.registerMatch('//p', bodyB);
+    const best = faux3.getMatchingTemplate(
+      document.getElementById('para'));
+    return { cold, docNode, isB: best && best.fn === bodyB };
+  });
+
+  // the absolute pattern matched on the very first touch (with the
+  // built-in * alongside)
+  expect(out.cold).toEqual(['//li', '*']);
+  // the built-in / rule nets the document node on a cold registry
+  expect(out.docNode).toEqual(['/']);
+  // the RE-REGISTERED template is the one that nets, not the
+  // overwritten one
+  expect(out.isB).toBe(true);
 });
 
 test('detached nodes match on demand; fragment-held roots do not', async ({ page }) => {

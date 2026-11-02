@@ -50,9 +50,11 @@ function isAbsolute (ast) {
 // with an ancestry predicate: a/b//c becomes
 //   c[ancestor-or-self::b/parent::a]
 // i.e. the last step stands alone and the inverse of the preceding
-// path becomes a predicate, so the pattern can be evaluated
-// against any node in one evaluation during the preemptive scan.
-// the ancestry predicate is APPENDED after the last step's own
+// path becomes a predicate, so the branch can be evaluated from
+// the ONE context that can net its target — the on-demand matching
+// engine's single-context property (see classifyBranch below), the
+// same expression regardless of which node is the candidate. the
+// ancestry predicate is APPENDED after the last step's own
 // predicates: order is NOT equivalent in general — for a
 // positional predicate like [2], prepending would count position
 // among the ancestry-passing candidates instead of among all the

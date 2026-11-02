@@ -95,14 +95,20 @@
   created mid-transform (or after a registration) match
   correctly, where the old engine silently missed them.
 
-  A corollary: cost is proportional to the nodes actually
-  matched, not the whole document — a fetched `document()` costs
-  nothing until its nodes are matched, and then only per
-  candidate. Another: detached nodes with an element parent match
-  on demand (the old walk covered only the ownerDocument's tree);
-  a candidate whose `parentNode` is a DocumentFragment still
-  does not match, since the parent-class guard requires an
-  element/document parent.
+  A corollary: for the single-context classes (parent, owner,
+  self) cost is proportional to the nodes actually matched, not
+  the whole document — a fetched `document()` costs nothing until
+  its nodes are matched, and then only per candidate; the root
+  and scan classes pay one per-root pass per call, as above.
+  Another: detached nodes with an element parent match on demand
+  (the old walk covered only the ownerDocument's tree); a
+  candidate whose `parentNode` is a DocumentFragment still does
+  not match, since the parent-class guard requires an
+  element/document parent. The on-demand freshness is likewise
+  per-class: a node created mid-transform matches through the
+  single-context classes immediately, but the root- and
+  scan-class per-root sets are a once-per-call snapshot — a
+  mid-transform node is not in them until the next transform().
 
   Built-in template rules (XSLT 1.0 §5.8) are installed in the
   constructor and ONLY in the constructor, as ordinary registered
@@ -467,6 +473,10 @@ export class Transform {
 
         // the collated expression index is stale: rebuild on demand
         this.#collated = null;
+        // the absolutes list rides the same rebuild — nulling the
+        // collated map alone would leave a STALE list serving the
+        // root-class pass until the next #collate()
+        this.#collatedAbsolute = [];
         // the memos are stale too: a new template changes what any
         // node matches
         this.#matches = new WeakMap();
@@ -656,20 +666,29 @@ export class Transform {
 
     // compute the matching set for a node in ONE pass over the
     // collated index, in INSERTION ORDER — #collatedAbsolute first,
-    // then the #collate Map in registration order — which
-    // reproduces the retired scan's Set insertion order exactly, so
-    // the stable priority sort keeps first-registered-wins ties as
-    // a delivered invariant, not a class-order accident
+    // then the #collate Map in registration order. this delivers
+    // first-registered-wins ties as an invariant by construction.
+    // (it deliberately departs from the retired scan's accidental
+    // tie order in two exotic cases — a self-class pattern vs a
+    // parent-class pattern tying on one node, and multi-context
+    // scan-class netting, where the old engine's document order
+    // could let a later-registered template win. registration
+    // order is the documented rule, so the new order is the fix.)
     #computeMatches (node) {
         const set = new Set();
+
+        // collate FIRST: it populates #collatedAbsolute, so the
+        // root-class pass below must not run before it (a cold
+        // registry — or the first compute after a registration —
+        // would otherwise test absolutes against an empty or
+        // stale list and silently miss every absolute match)
+        const byString = this.#collate();
 
         // root class: netted once per root, membership-checked
         const root = node.ownerDocument || node;
         for (const { string, template } of this.#collatedAbsolute)
             if (this.#rootSet(root, string).has(node))
                 set.add(template);
-
-        const byString = this.#collate();
         for (const entry of byString.values()) {
             // dispatch by the branch's classification: the single
             // context the membership check runs from

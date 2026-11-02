@@ -42,8 +42,10 @@ import { compilePattern } from './pattern.js';
     `c[ancestor-or-self::b/parent::a]`, ie rewrite it as if it was the
     default (ie child) axis, prepending the inverse of the original
     path to the predicates
-    * this will make it possible to precompile and evaluate elementary
-      match patterns when doing the preemptive scan in the `Transform`.
+    * this collapses each elementary branch to a single step (plus
+      ancestry predicates), which is what lets the `Transform`'s
+      on-demand matching engine classify the branch and evaluate it
+      from the one context that can net its target.
 
   Therefore, a `Template` should possess a member of the form `{
   rewrittenExpr: [XPathExpression, computedPriority] }`.  We can call

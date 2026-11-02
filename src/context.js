@@ -307,8 +307,16 @@ export class Context {
       return this.registry.documents.get(abs);
 
     const xhr = new XMLHttpRequest();
-    xhr.open('GET', abs, false);
-    xhr.send(null);
+    try {
+      xhr.open('GET', abs, false);
+      xhr.send(null);
+    }
+    catch (e) {
+      // a connection-level failure (offline, DNS, refused) throws
+      // from send() before any status exists: same null contract,
+      // same per-URI caching
+      return this.#cacheFailure(abs);
+    }
     if (xhr.status !== 200 && xhr.status !== 0)
       return this.#cacheFailure(abs);
 

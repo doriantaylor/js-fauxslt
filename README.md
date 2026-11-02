@@ -153,7 +153,8 @@ When multiple templates match a node, the one with the highest
 priority wins: [XSLT 1.0 §5.5](https://www.w3.org/TR/xslt-10/#conflict)
 default priorities are computed per elementary pattern branch (a name
 test is `0`, a wildcard or node-type test `-0.5`, a
-namespace/any-namespace wildcard or `processing-instruction()` `-0.25`,
+namespace/any-namespace wildcard `-0.25`, a bare
+`processing-instruction()` `-0.5` (its named form is `0`),
 and any predicate bumps the branch to `0.5`). An explicit `priority`
 can be given at registration. Equal priorities resolve to the
 first-registered template.
@@ -279,13 +280,21 @@ the fallback.
 
 Matches are memoized per node, and the memo is dropped at the start
 of every `transform()` and on every registration — so a node
-created *after* registration (or mid-transform, then routed through
-a nested `applyTemplates`) matches on demand, with no reset dance.
-Work is proportional to the nodes actually matched, not the whole
-document: a document fetched through `ctx.document()` costs nothing
-until its nodes are matched. Detached nodes with an element parent
-match on demand too; a candidate whose parent is a
-`DocumentFragment` does not (its element-parented descendants do).
+created *after* registration, or mid-transform then routed through
+a nested `applyTemplates`, matches on demand with no reset dance
+(this holds for the parent, owner, and self classes — the
+single-context forms; absolute patterns and the `..` forms see a
+once-per-call per-document snapshot, so a node created mid-transform
+is not in those sets until the next `transform()`). Work is
+proportional to the nodes actually matched, not the whole document:
+a document fetched through `ctx.document()` costs nothing until its
+nodes are matched (one evaluation per candidate for the
+single-context classes; one pass per document per call for absolute
+and `..` patterns). Detached nodes with an element parent match on
+demand too; a candidate whose parent is a `DocumentFragment` does
+not (its element-parented descendants do). Note that the memo is
+per node: a node first matched while attached keeps that match
+after being detached, until the next `transform()` or registration.
 The rare upward-netting forms (the bare `..`, `a/..`-style tails)
 are matched by a per-document scan, exactly as before.
 

@@ -1007,3 +1007,89 @@ test('registration-rewritten patterns stay resolvable cross-registry', async ({ 
   expect(out.patterns).toEqual(['*']);
   expect(out.mainText).toContain('some text');
 });
+
+// --- identity mode over an HTML document --------------------------------
+test('identity mode produces real elements in an HTML document', async ({ page }) => {
+  // the HTML parser reports tagName/nodeName uppercased ('P') and
+  // localName lowercased ('p'). markup-mixup takes the
+  // createElementNS branch in an HTML document (its elements carry
+  // the XHTML namespaceURI, so gatherNS binds the empty prefix),
+  // and createElementNS never case-folds — a raw tagName therefore
+  // yields an XHTML-namespaced 'P', an HTMLUnknownElement. the
+  // identity path emits the qualified name (localName for
+  // unprefixed elements) so the replacement is a real element.
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform(null, {
+      identity: true });
+
+    // (a) unprefixed leg: an HTML paragraph identity-transforms
+    // into a real element with its text round-tripped
+    const para = document.createElement('p');
+    para.textContent = 'html identity';
+    document.body.appendChild(para);
+    faux.transform(para);
+    const p2 = document.body.lastElementChild;
+    const legA = {
+      replaced: p2 && p2 !== para,
+      localName: p2 && p2.localName,
+      ns: p2 && p2.namespaceURI,
+      // HTMLUnknownElement is what a case-folded 'P' in the XHTML
+      // namespace yields; a real paragraph is HTMLParagraphElement
+      ctor: p2 && p2.constructor.name,
+      text: p2 && p2.textContent,
+    };
+
+    // (b) prefixed leg: a namespaced element created via
+    // createElementNS keeps its QName and namespace through the
+    // identity round trip. the declaration is set as an explicit
+    // attribute because createElementNS does not add one — and the
+    // registry re-states in-scope declarations FROM attributes, so
+    // it is what makes the binding visible to the copy (as it
+    // always is in a real XML document)
+    const holder = document.createElement('div');
+    const x = document.createElementNS('urn:x', 'y:z');
+    x.setAttribute('xmlns:y', 'urn:x');
+    x.textContent = 'prefixed body';
+    holder.appendChild(x);
+    document.body.appendChild(holder);
+    faux.transform(holder);
+    const div = document.body.lastElementChild;
+    const out = { ...legA,
+      divReplaced: div && div !== holder,
+      divLocalName: div && div.localName,
+      childName: div && div.firstElementChild &&
+        div.firstElementChild.nodeName,
+      childLocalName: div && div.firstElementChild &&
+        div.firstElementChild.localName,
+      childNS: div && div.firstElementChild &&
+        div.firstElementChild.namespaceURI,
+      childText: div && div.firstElementChild &&
+        div.firstElementChild.textContent,
+      // the xmlns:y declaration the registry re-states is visible
+      // as an attribute on the copy
+      childDecl: div && div.firstElementChild &&
+        div.firstElementChild.getAttribute('xmlns:y'),
+    };
+
+    // clean up the appended fixture nodes
+    p2 && p2.remove();
+    div && div.remove();
+    return out;
+  });
+
+  // (a) the paragraph leg: a real element, not an HTMLUnknownElement
+  expect(out.replaced).toBe(true);
+  expect(out.localName).toBe('p');
+  expect(out.ns).toBe('http://www.w3.org/1999/xhtml');
+  expect(out.ctor).toBe('HTMLParagraphElement');
+  expect(out.text).toBe('html identity');
+  // (b) the prefixed leg: QName, namespace, and body all survive
+  expect(out.divReplaced).toBe(true);
+  expect(out.divLocalName).toBe('div');
+  expect(out.childName).toBe('y:z');
+  expect(out.childLocalName).toBe('z');
+  expect(out.childNS).toBe('urn:x');
+  expect(out.childText).toBe('prefixed body');
+  expect(out.childDecl).toBe('urn:x');
+});

@@ -148,6 +148,23 @@ import { NamespaceMap, DEFAULT_PREFIX, defaultNamespaceURI }
 import { Context } from './context.js';
 import { isDefaultNamespaced } from './expressions.js';
 
+// the qualified name to emit for an identity-copied element. the
+// HTML parser reports tagName/nodeName UPPERCASED and localName
+// lowercased, while the XML parser preserves case — and
+// markup-mixup's ELEMENT picks createElementNS over createElement
+// whenever the insertion point binds the empty prefix (always in an
+// HTML document, whose elements carry the XHTML namespaceURI).
+// createElementNS never case-folds — only createElement does — so a
+// raw tagName yields an XHTML-namespaced element named 'P', an
+// HTMLUnknownElement, instead of the 'p' the parser actually
+// reported. localName is the case the source document carries for
+// unprefixed elements; a PREFIXED element keeps its full QName
+// (nodeName): #identityElement re-states the in-scope xmlns:*
+// declarations that bind the prefix, so markup-mixup creates it
+// namespaced correctly.
+const qualifiedName = (node) =>
+    node.nodeName.indexOf(':') >= 0 ? node.nodeName : node.localName;
+
 export class Transform {
 
     // see the constructor comments for what these hold
@@ -228,7 +245,7 @@ export class Transform {
         if (!node.namespaceURI)
             return Transform.#identityNoNS(ctx);
 
-        const out = { '#tag': [node.tagName] };
+        const out = { '#tag': [qualifiedName(node)] };
         // attributes (markup-mixup emits xmlns declarations first,
         // then the rest alphabetically)
         const attrs = ctx.getAttributes();
@@ -259,7 +276,7 @@ export class Transform {
     // namespace-less descendants land correctly too)
     static #identityNoNS = function (ctx) {
         const node = ctx.node;
-        const el = ctx.doc.createElement(node.tagName);
+        const el = ctx.doc.createElement(qualifiedName(node));
         for (const a of node.attributes) {
             if (a.prefix === 'xmlns' || a.name === 'xmlns')
                 el.setAttributeNS('http://www.w3.org/2000/xmlns/',

@@ -20,7 +20,7 @@ const isDraft = true;
 
 // this is like <xsl:template match="…">
 fauXSLT.registerMatch('body', (ctx) => {
-    // note `this` is bound to an execution context,
+    // note the argument is the execution context,
     // which among other things has the current node
     const classes = Array.from(ctx.node.classList);
 

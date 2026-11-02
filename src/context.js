@@ -287,21 +287,32 @@ export class Context {
   // XSLT's document(). synchronous by design (the template pipeline
   // is synchronous; fetch offers no sync mode, so XMLHttpRequest in
   // async:false mode is the only browser mechanism). returns the
-  // parsed Document on success, or NULL on failure — a transport
-  // failure (a non-200/non-0 status) or a parse error (a
-  // parsererror root) — never throwing. the null is CACHED like a
-  // success: one GET per URI per registry, failures included, so a
+  // parsed Document on success, or NULL on failure — unresolvable
+  // URL syntax, a transport failure (a non-200/non-0 status or a
+  // connection-level error), or a parse error (a parsererror root)
+  // — never throwing. fetch failures are CACHED like a success:
+  // one GET per URI per registry, failures included, so a
   // transient failure poisons the URI for the Transform's lifetime
   // (matching the success path's caching shape; a retry that can
-  // recover needs a fresh Transform). NOTE the interaction with
-  // polyvalent applyTemplates: after a failed fetch,
+  // recover needs a fresh Transform). URL-syntax failures return
+  // null uncached (no request was made; the failure is
+  // deterministic). NOTE the interaction with polyvalent
+  // applyTemplates: after a failed fetch,
   // ctx.applyTemplates(ctx.document(uri)) is applyTemplates(null) —
   // the CURRENT node's children, silently. guard the call site:
   // const doc = ctx.document(uri); if (doc) ctx.applyTemplates(doc).
   document (uri) {
-    // resolve relative URIs against the current document
-    const abs = new URL(uri,
-      this.doc.baseURI || document.baseURI).href;
+    // resolve relative URIs against the current document. malformed
+    // URL SYNTAX throws from the URL constructor: same null
+    // contract, though nothing is cached — no request was made, so
+    // the one-GET-per-URI shape holds trivially, and the failure is
+    // deterministic anyway
+    let abs;
+    try {
+      abs = new URL(uri,
+        this.doc.baseURI || document.baseURI).href;
+    }
+    catch (e) { return null; }
     if (!this.registry.documents) this.registry.documents = new Map();
     if (this.registry.documents.has(abs))
       return this.registry.documents.get(abs);

@@ -1283,11 +1283,16 @@ test('ctx.document returns null on failure and caches it', async ({ page }) => {
     const n1 = ctx.document('http://localhost:1/nope.xml');
     const n2 = ctx.document('http://localhost:1/nope.xml');
 
+    // malformed URL SYNTAX throws from the URL constructor before
+    // any request: null too (nothing is cached — no request was
+    // made, and the failure is deterministic)
+    const u = ctx.document('http://localhost:99999/x');
+
     // and the SUCCESS path still works on the same registry
     const ok = ctx.document('/test/browser/fixture.xml');
 
     return {
-      d1, d2, m1, m2, n1, n2,
+      d1, d2, m1, m2, n1, n2, u,
       okRoot: ok && ok.documentElement.tagName,
     };
   });
@@ -1301,6 +1306,8 @@ test('ctx.document returns null on failure and caches it', async ({ page }) => {
   // connection-level failure: null too, not a NetworkError
   expect(out.n1).toBeNull();
   expect(out.n2).toBeNull();
+  // malformed URL syntax: null, not a TypeError
+  expect(out.u).toBeNull();
   // one GET per URI: the 404 route fired exactly once
   expect(fetches).toBe(1);
   // the success path is unaffected on the same registry
@@ -1441,14 +1448,13 @@ test('. matches element and document candidates only; .. matches nodes with an e
   expect(out.dotdot.childless).toBe(false);
 });
 
-test('absolute patterns match over a fetched document', async ({ page }) => {
-  // root-class per-root sets on a non-ambient document: the netted
-  // set for //entry is computed against the FETCHED feed's root
-  // (its own document), membership-checked per candidate. the
-  // pattern is prefixed per the registration-time ambient state
-  // (the HTML page has no default namespace, so none is needed —
-  // but the feed IS default-namespaced, so the pattern must carry
-  // the feed's own namespace through a prefix)
+test('fetched-document nodes match through applyTemplates routing', async ({ page }) => {
+  // the document()-plus-polyvalent synergy: a fetched feed's entry
+  // nodes routed through applyTemplates as a node list net their
+  // template (a bare prefixed name pattern, parent class), resolved
+  // against the FEED's per-document namespace. the root-class form
+  // over a fetched document is pinned by the cold-registry leg in
+  // the test below plus the '//atom:entry' probe shape
   await go(page);
   const out = await page.evaluate(() => {
     const faux = new window.fauxslt.Transform({
@@ -1468,12 +1474,44 @@ test('absolute patterns match over a fetched document', async ({ page }) => {
     return { entries, titles };
   });
 
-  // the feed has two entries and both matched through the absolute
-  // routing (a plain querySelectorAll hands the node list to
-  // applyTemplates; each entry nets its template against the
-  // fetched document's nodes)
+  // the feed has two entries and both matched through the node-list
+  // routing (each entry nets its template against the fetched
+  // document's nodes)
   expect(out.entries).toBe(2);
   expect(out.titles).toEqual(['first', 'second']);
+});
+
+test('an absolute pattern matches over a fetched document', async ({ page }) => {
+  // the root-class leg the routing test does not cover: a genuinely
+  // absolute pattern (//atom:entry), cold first touch against the
+  // FETCHED feed's nodes — the per-root netted set is computed
+  // against the feed's own document root
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform({
+      'atom': 'http://www.w3.org/2005/Atom' });
+    let cold = null, seen = null;
+    faux.registerMatch('//atom:entry', function (ctx) {
+      return { '#li': 'abs: ' + ctx.select('string(atom:title)') };
+    });
+    faux.registerMatch('p', function (ctx) {
+      const doc = ctx.document('/test/browser/feed.xml');
+      // cold first touch of a fetched node against an absolute
+      // pattern: the root-class set must net it immediately
+      const entry = doc.querySelector('entry');
+      cold = faux.getMatchingTemplates(entry)
+        .map(t => t.pattern);
+      const r = ctx.applyTemplates([entry]);
+      seen = Array.isArray(r) ? r.map(s => s['#li']) : null;
+      return null;
+    });
+    faux.transform(document.getElementById('para'));
+    return { cold, seen };
+  });
+
+  // the absolute pattern netted the fetched node on first touch
+  expect(out.cold).toEqual(['//atom:entry', '*']);
+  expect(out.seen).toEqual(['abs: first']);
 });
 
 test('absolute patterns match on a cold registry first touch', async ({ page }) => {

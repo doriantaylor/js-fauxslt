@@ -378,13 +378,15 @@ nothing removes its node outright.
 - **`document (uri)`** — fetch, parse, and cache an external XML
   document (the analogue of XSLT's `document()`; synchronous).
   Returns the parsed `Document` on success, or **`null`** on
-  failure — a transport failure (a non-200 status) or a malformed
-  payload — instead of throwing. The `null` is cached like a
+  failure — a transport failure (a non-200 status, or a
+  connection-level error), a malformed payload, or unresolvable
+  URL syntax — instead of throwing. The `null` is cached like a
   success: one GET per URI per `Transform` lifetime, failures
   included, so a transient failure poisons the URI until a fresh
-  `Transform` is built. Because a `null` first argument to
-  `applyTemplates` means *the current node's children*, guard the
-  call site:
+  `Transform` is built. (URL-syntax failures return null without
+  caching — no request was made, and the failure is deterministic.)
+  Because a `null` first argument to `applyTemplates` means *the
+  current node's children*, guard the call site:
 
   ```js
   const doc = ctx.document(uri);

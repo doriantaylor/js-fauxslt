@@ -1181,3 +1181,58 @@ test('applyTemplates takes a polyvalent first argument', async ({ page }) => {
   expect(out['plain object']).toBe('TypeError');
   expect(out['non-node member']).toBe('TypeError');
 });
+
+test('ctx.document returns null on failure and caches it', async ({ page }) => {
+  // the null contract: a transport failure and a malformed payload
+  // both return null (not a throw), and the null is CACHED — one
+  // GET per URI per registry lifetime, failures included. the
+  // existing success/caching test stays green alongside this
+  await go(page);
+
+  // a routed 404 with a request counter
+  let fetches = 0;
+  await page.route('**/missing.xml', async (route) => {
+    fetches++;
+    await route.fulfill({ status: 404, body: 'not found' });
+  });
+  // a routed well-formed transport of malformed XML
+  await page.route('**/malformed.xml', async (route) => {
+    await route.fulfill({ status: 200,
+      contentType: 'application/xml',
+      body: '<w><unclosed></w>' });
+  });
+
+  const out = await page.evaluate(async () => {
+    const faux = new window.fauxslt.Transform();
+    const ctx = new window.fauxslt.Context(faux,
+      document.getElementById('para'));
+
+    // transport failure: null, twice — the second call must not
+    // refetch (the counter on the route tells us it did not)
+    const d1 = ctx.document('/missing.xml');
+    const d2 = ctx.document('/missing.xml');
+
+    // malformed payload: null, likewise cached
+    const m1 = ctx.document('/malformed.xml');
+    const m2 = ctx.document('/malformed.xml');
+
+    // and the SUCCESS path still works on the same registry
+    const ok = ctx.document('/test/browser/fixture.xml');
+
+    return {
+      d1, d2, m1, m2,
+      okRoot: ok && ok.documentElement.tagName,
+    };
+  });
+
+  // transport failure: null on both calls, no throw
+  expect(out.d1).toBeNull();
+  expect(out.d2).toBeNull();
+  // malformed payload: null on both calls
+  expect(out.m1).toBeNull();
+  expect(out.m2).toBeNull();
+  // one GET per URI: the 404 route fired exactly once
+  expect(fetches).toBe(1);
+  // the success path is unaffected on the same registry
+  expect(out.okRoot).toBe('fixture');
+});

@@ -286,9 +286,18 @@ export class Context {
   // fetch and parse an external XML document by URI, the analogue of
   // XSLT's document(). synchronous by design (the template pipeline
   // is synchronous; fetch offers no sync mode, so XMLHttpRequest in
-  // async:false mode is the only browser mechanism). documents are
-  // cached per Transform: one GET per URI per transform, per
-  // document() semantics.
+  // async:false mode is the only browser mechanism). returns the
+  // parsed Document on success, or NULL on failure — a transport
+  // failure (a non-200/non-0 status) or a parse error (a
+  // parsererror root) — never throwing. the null is CACHED like a
+  // success: one GET per URI per registry, failures included, so a
+  // transient failure poisons the URI for the Transform's lifetime
+  // (matching the success path's caching shape; a retry that can
+  // recover needs a fresh Transform). NOTE the interaction with
+  // polyvalent applyTemplates: after a failed fetch,
+  // ctx.applyTemplates(ctx.document(uri)) is applyTemplates(null) —
+  // the CURRENT node's children, silently. guard the call site:
+  // const doc = ctx.document(uri); if (doc) ctx.applyTemplates(doc).
   document (uri) {
     // resolve relative URIs against the current document
     const abs = new URL(uri,
@@ -301,17 +310,23 @@ export class Context {
     xhr.open('GET', abs, false);
     xhr.send(null);
     if (xhr.status !== 200 && xhr.status !== 0)
-      throw new Error('document(): GET ' + abs +
-        ' failed with ' + xhr.status);
+      return this.#cacheFailure(abs);
 
     const parsed = new DOMParser().parseFromString(
       xhr.responseText, 'application/xml');
     // DOMParser reports parse errors as a document with a
     // parsererror root, not an exception
     if (parsed.getElementsByTagName('parsererror').length)
-      throw new Error('document(): ' + abs + ' is not well-formed XML');
+      return this.#cacheFailure(abs);
 
     this.registry.documents.set(abs, parsed);
     return parsed;
+  }
+
+  // record a failed fetch: the null rides the same per-URI cache
+  // as a success, so the URI is fetched once per registry lifetime
+  #cacheFailure (abs) {
+    this.registry.documents.set(abs, null);
+    return null;
   }
 }

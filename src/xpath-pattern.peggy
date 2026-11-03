@@ -15,10 +15,11 @@
 //                          | 'key(' LITERAL ',' LITERAL ')'
 //
 // PredicateExpr is parsed with a restricted XPath 1.0 expression
-// grammar: no variable references (XSLT forbids them in patterns),
-// only core-library function calls, and only the child, attribute,
-// self, parent, descendant, and descendant-or-self axes. Those are
-// documented deviations from "any Expr" — the practical subset.
+// grammar: no variable references (XSLT forbids them in patterns)
+// and only core-library function calls. Those are documented
+// deviations from "any Expr" — the practical subset. Predicates
+// accept every XPath 1.0 axis, per §5.2 (which constrains only the
+// outer pattern path, not the predicate expressions).
 //
 // key() is part of the §5.2 grammar so it PARSES (top level only,
 // never inside predicates); evaluation throws not-implemented.
@@ -298,15 +299,17 @@ Step
       return { type: 'step', axis, test, predicates: preds };
     }
 
-// axes usable in predicate expressions; others fail loudly
+// axes usable in predicate expressions: all of XPath 1.0's —
+// predicates are arbitrary Exprs (§5.2 constrains only the outer
+// pattern path; see ChildOrAttributeAxisSpecifier), so every axis
+// is accepted. longest-first ordering so PEG's possessive choice
+// does not strand the -or-self suffixes.
 StepAxisSpecifier
-  = name:$('descendant-or-self' / 'descendant' / 'child' / 'attribute'
-          / 'self' / 'parent') "::" { return name; }
-  / other:$('ancestor-or-self' / 'ancestor' / 'following-sibling'
-          / 'preceding-sibling' / 'following' / 'preceding'
-          / 'namespace') "::" {
-      error("axis " + other + ":: is not in the supported subset");
-    }
+  = name:$('descendant-or-self' / 'ancestor-or-self'
+          / 'following-sibling' / 'preceding-sibling'
+          / 'descendant' / 'following' / 'preceding' / 'ancestor'
+          / 'namespace' / 'child' / 'attribute' / 'self' / 'parent')
+    "::" { return name; }
   / "@" { return 'attribute'; }
   / "" { return 'child'; }
 

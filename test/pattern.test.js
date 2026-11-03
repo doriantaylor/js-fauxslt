@@ -58,6 +58,51 @@ test('accepts: bare attribute step', ok('@*'));
 test('accepts: string equality predicate',
      ok("para[@class = 'draft']"));
 test('accepts: arbitrary path axes in predicates', ok('text()[ancestor::pre]'));
+// predicates are arbitrary Exprs (§5.2 constrains only the outer
+// path), so every XPath 1.0 axis parses in predicate position. the
+// six previously-accepted axes (child, attribute, self, parent,
+// descendant, descendant-or-self) pin the full-set criterion;
+// descendant-or-self:: especially, since // was its only prior
+// route in a predicate
+test('accepts: ancestor axis in predicate', ok('text()[ancestor::pre]'));
+test('accepts: ancestor-or-self axis in predicate',
+  ok('li[ancestor-or-self::ul]'));
+test('accepts: following-sibling axis in predicate',
+  ok('li[following-sibling::*]'));
+test('accepts: preceding-sibling axis in predicate',
+  ok('li[preceding-sibling::li]'));
+test('accepts: following axis in predicate', ok('div[following::p]'));
+test('accepts: preceding axis in predicate', ok('item[preceding::li]'));
+test('accepts: descendant axis in predicate', ok('li[descendant::ul]'));
+test('accepts: descendant-or-self axis in predicate',
+  ok('p[descendant-or-self::x]'));
+test('accepts: child axis in predicate', ok('d[child::x]'));
+test('accepts: attribute axis in predicate', ok('a[attribute::href]'));
+test('accepts: self axis in predicate', ok('s[self::s]'));
+test('accepts: parent axis in predicate', ok('q[parent::q]'));
+test('accepts: namespace axis in predicate', ok('p[namespace::x]'));
+test('accepts: nested predicate path with an axis',
+  ok('div[div[following::p]]'));
+
+// the serializer (serStep) emits axis:: for any axis; assert the
+// round-trip so a serializer regression fails loudly
+test('predicated axes round-trip through serialization', () => {
+  assert.equal(
+    compilePattern('text()[ancestor::pre]').evalExpr,
+    'text()[ancestor::pre]');
+  // the prefix rewrite reaches predicate steps
+  assert.equal(
+    compilePattern('text()[ancestor::pre]', { prefix: '_' }).evalExpr,
+    'text()[ancestor::_:pre]');
+  // namespace-axis name tests are never rewritten: namespace nodes
+  // are not element name tests (see rewriteNameTests)
+  assert.equal(
+    compilePattern('p[namespace::x]', { prefix: '_' }).evalExpr,
+    '_:p[namespace::x]');
+  assert.equal(
+    compilePattern('p[namespace::x]').evalExpr,
+    'p[namespace::x]');
+});
 
 // --- outside the subset: syntax errors ------------------------------
 test('rejects: empty', bad(''));
@@ -66,6 +111,10 @@ test('rejects: unknown function in predicate', bad('li[frob()]'));
 test('rejects: key() inside predicate', bad("li[key('k', 'v')]"));
 test('rejects: unsupported axis', bad('ancestor::para'));
 test('rejects: following-sibling axis', bad('following-sibling::*'));
+// the §5.2 child/attribute constraint binds the OUTER path only;
+// a forbidden outer axis is rejected even with a legal predicate
+test('rejects: unsupported outer axis with legal predicate',
+  bad('ancestor::para[x]'));
 test('rejects: text node with argument', bad('text("x")'));
 test('rejects: numeric-only', bad('42'));
 test('rejects: malformed predicate', bad('li['));

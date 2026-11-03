@@ -662,6 +662,48 @@ test('predicated node tests evaluate: text()[normalize-space(.)]', async ({ page
   expect(out.betaKept).toBe(true);
 });
 
+test('ancestor-axis predicates match: text()[ancestor::pre]', async ({ page }) => {
+  await go(page);
+  const out = await page.evaluate(() => {
+    const faux = new window.fauxslt.Transform();
+    const seen = [];
+    faux.registerMatch('text()[ancestor::pre]', function (ctx) {
+      seen.push(ctx.node.data);
+      return null;
+    });
+    // two levels deep: transform() replaces the node, which needs
+    // an element parent for text results — the inner element r, not
+    // w, is the transform target
+    const xml = new DOMParser().parseFromString(
+      '<w><r><pre>alpha</pre><p>beta</p><pre>gamma</pre></r></w>',
+      'application/xml');
+    const r = xml.querySelector('r');
+    const w = r.parentNode;
+    try {
+      // r is unclaimed: the built-in * recurses into pre and p; the
+      // ancestor-axis template claims exactly the text nodes inside
+      // pre (dropping them), the built-in text rule keeps the rest
+      faux.transform(r);
+      return { threw: false, seen,
+        claimedDropped: !w.textContent.includes('alpha') &&
+          !w.textContent.includes('gamma'),
+        betaKept: w.textContent.includes('beta') };
+    }
+    catch (e) {
+      return { threw: true, name: e.name, msg: String(e.message) };
+    }
+  });
+
+  // the ancestor axis survives compile, serialization, and native
+  // evaluation end-to-end against the built artifact: exactly the
+  // text nodes inside pre are claimed and dropped, beta survives
+  // via the built-in text rule
+  expect(out.threw).toBe(false);
+  expect(out.seen).toEqual(['alpha', 'gamma']);
+  expect(out.claimedDropped).toBe(true);
+  expect(out.betaKept).toBe(true);
+});
+
 test('non-default modes have no built-ins; fallback recurses and drops text', async ({ page }) => {
   await go(page);
   const out = await page.evaluate(() => {

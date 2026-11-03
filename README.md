@@ -274,7 +274,10 @@ rewritten ancestry forms), its owner element for attribute tests
 membership-checked per candidate. Node test patterns and attribute
 patterns therefore match genuinely: the netted node is the one the
 template runs against, and predicated node tests
-(`text()[normalize-space(.)='x']`) evaluate natively. DocumentType
+(`text()[normalize-space(.)='x']`) evaluate natively. Pattern paths
+are restricted to child/attribute steps per §5.2, but predicates
+are ordinary XPath expressions and accept every XPath 1.0 axis
+(`text()[ancestor::pre]`), evaluated natively. DocumentType
 nodes are never netted by any XPath node test and always fall to
 the fallback.
 

@@ -226,8 +226,10 @@ function rewriteNameTests (node, prefix) {
   if (!node || typeof node !== 'object') return;
   if (node.type === 'step' && node.test && node.test.kind === 'name') {
     const name = node.test.name;
-    // element steps only; attribute steps carry axis 'attribute'
-    if (node.axis !== 'attribute' &&
+    // element steps only; attribute and namespace steps carry
+    // non-element nodes (expressions.js's NON_ELEMENT_AXES is the
+    // precedent): a namespace:: name test is not an element name
+    if (node.axis !== 'attribute' && node.axis !== 'namespace' &&
       name.indexOf(':') === -1 && name !== '*')
       node.test.name = prefix + ':' + name;
   }

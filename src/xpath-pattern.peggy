@@ -18,8 +18,8 @@
 // grammar: no variable references (XSLT forbids them in patterns)
 // and only core-library function calls. Those are documented
 // deviations from "any Expr" — the practical subset. Predicates
-// accept every XPath 1.0 axis, per §5.2 (which constrains only the
-// outer pattern path, not the predicate expressions).
+// accept every XPath 1.0 axis: §5.2 constrains only the outer
+// pattern path and leaves predicates as arbitrary Exprs.
 //
 // key() is part of the §5.2 grammar so it PARSES (top level only,
 // never inside predicates); evaluation throws not-implemented.

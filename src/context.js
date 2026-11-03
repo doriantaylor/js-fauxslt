@@ -34,10 +34,10 @@
 
   transform (node, params) {
       const ctx  = new Context(this, node, params);
-      const spec = ctx.applyTemplates('self::node()');
+      const spec = ctx.applyTemplates(node);
 
       // note that MARKUP returns the last node added
-      return MARKUP({ replace: node, spec: spec, args: [ctx] });
+      return MARKUP({ replace: node, spec: spec });
   }
   ```
 
@@ -76,276 +76,400 @@
 
 import { rewriteExpression } from './expressions.js';
 
+/**
+ * This is a disposable execution context that is passed in as an
+ * argument to a template body function when the latter is invoked. It
+ * provides state data such as the context node and parameters, and
+ * methods (such as `applyTemplates`) to continue the transformation.
+ */
 export class Context {
 
-  constructor (registry, node, params, mode = null) {
-    this.registry = registry;
-    this.node = node;
-    this.doc = node.ownerDocument || node;
+    /**
+     * Initialize an execution context.
+     *
+     * @param {Transform} registry
+     *  An instance of the transform registry
+     * @param {Node} node
+     *  The context node
+     * @param {string | null} mode
+     *  The current template mode
+     */
+    constructor (registry, node, params, mode = null) {
+        this.registry = registry;
+        this.node = node;
 
-    // the active mode, inherited through applyTemplates unless
-    // overridden; null is the default mode
-    this.mode = mode;
+        // the current mode, propagated through `applyTemplates` unless
+        // overridden; defaults to `null`
+        this.mode = mode || null;
 
-    // parameters are yoked to the Context at mint: each invocation
-    // gets its own (shallow) copy, so downstream templates can mutate
-    // their params without leaking into siblings or ancestors. the
-    // merge chain is most-specific-wins: registry globals <
-    // transform() params < applyTemplates/callTemplate params.
-    this.params = Object.assign({}, params || {});
-  }
-
-  // evaluate an arbitrary expression: returns a node array, number,
-  // string, or boolean depending on the expression. the expression
-  // is precompiled per (registry, document) through the registry's
-  // XPathExpression cache — select() is typically called in loops,
-  // and createExpression front-loads the parse. when the registry
-  // and the context document share a default-namespace state, the
-  // expression is first REWRITTEN: unprefixed element name tests
-  // become `_:name`, resolved against the document's
-  // default-namespace URI by the registry's per-document resolver
-  // (see Transform.effectiveDefaultPrefix). documents without a
-  // default namespace pass through untouched, so unprefixed names
-  // match namespace-less elements natively. this is the same
-  // rewrite match patterns get at registration time, funneled
-  // through the same decision source.
-  select (expression) {
-    const prefix = this.registry.effectiveDefaultPrefix(this.doc);
-    const string = prefix ?
-      rewriteExpression(expression, prefix) : expression;
-    const expr = this.registry.compiledExpression(
-      string, this.doc);
-    const r = expr.evaluate(this.node, XPathResult.ANY_TYPE, null);
-    switch (r.resultType) {
-      case XPathResult.NUMBER_TYPE:  return r.numberValue;
-      case XPathResult.STRING_TYPE:  return r.stringValue;
-      case XPathResult.BOOLEAN_TYPE: return r.booleanValue;
-      default: {
-        const nodes = [];
-        let n;
-        while ((n = r.iterateNext())) nodes.push(n);
-        return nodes;
-      }
+        // parameters are yoked to the Context at mint: each invocation
+        // gets its own (shallow) copy, so downstream templates can mutate
+        // their params without leaking into siblings or ancestors. the
+        // merge chain is most-specific-wins: registry globals <
+        // transform() params < applyTemplates/callTemplate params.
+        this.params = Object.assign({}, params || {});
     }
-  }
 
-  // truthiness of select()
-  test (expression) {
-    return !!this.select(expression);
-  }
-
-  // find the best template for a node through the registry's
-  // node-match index, in the active mode
-  _bestTemplate (node) {
-    return this.registry.getMatchingTemplate(node, this.mode);
-  }
-
-  // apply templates to a node-set. the first argument is polyvalent:
-  // omitted, null, undefined, or '' nets the current node's children
-  // (unchanged); an XPath string is evaluated through select()
-  // (rewritten per the evaluation document's default namespace);
-  // a precompiled XPathExpression instance is evaluated VERBATIM
-  // against the current node — a compiled object cannot be
-  // rewritten, so the caller's own bindings are the contract (this
-  // asymmetry with the string form is deliberate: prefer the string
-  // when the default-namespace rewrite is wanted, the instance when
-  // it is not); anything with a numeric nodeType (a Node, Document,
-  // DocumentFragment, attribute) routes as a singleton; an Array,
-  // NodeList, or HTMLCollection routes as a node list; anything else
-  // throws a TypeError. this gives the XSLT document($uri) idiom a
-  // spelling — ctx.applyTemplates(ctx.document(uri)) — and lets a
-  // template body route the nodes it already holds without paying
-  // for an XPath round trip. the mode is inherited from this
-  // Context unless overridden by the third argument. returns an
-  // array of results — markup-mixup specs and/or DOM nodes — or
-  // NULL when nothing was netted, so `applyTemplates(...) ||
-  // fallback` idioms work (null is falsy; an empty array would
-  // not be). this matches `copyOf` (null on empty) and
-  // `callTemplate` (null on missing). null is itself absorbed by
-  // markup-mixup in every spec position (a null entry is a
-  // no-op), and by transform()'s drop path, so DOM assembly
-  // stays in `Transform.transform`.
-  applyTemplates (expression, params, mode) {
-    let nodes = null;
-    if (typeof expression === 'undefined' ||
-      expression === null || expression === '')
-      nodes = Array.from(this.node.childNodes);
-    else if (typeof expression === 'string') {
-      const out = this.select(expression);
-      nodes = Array.isArray(out) ? out : [out];
+    /**
+     * Shorthand for the context node's `ownerDocument` (or node
+     * itself if it _is_ the document or otherwise has none).
+     *
+     * @readonly
+     * @type {Node}
+     */
+    get doc () {
+        return this.node.ownerDocument || this.node;
     }
-    else if (typeof XPathExpression !== 'undefined' &&
-      expression instanceof XPathExpression) {
-      // verbatim: the caller compiled it, the caller resolves it
-      const r = expression.evaluate(this.node,
-        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
-      nodes = [];
-      for (let i = 0; i < r.snapshotLength; i++)
-        nodes.push(r.snapshotItem(i));
+
+    /**
+     * Shorthand that returns `this.node.nodeName` if there is a
+     * namespace prefix and `localName` otherwise. This gets around a
+     * weirdness with the HTML DOM, which, while elements are in the
+     * _XHTML_ namespace, `nodeName` is the same as
+     * `localName.toUpperCase()`. When passed into
+     * Document#createElementNS, this produces an `HTMLUnknownElement`
+     * instead of the element expected.
+     *
+     * @readonly
+     * @type {string}
+     */
+    get nodeName () {
+        const n = this.node;
+        // XXX not sure if we want to fake these up or not
+        if (!(n.nodeType in [1, 2, 7])) return null;
+        return n.nodeName.indexOf(':') >= 0 ? n.nodeName : n.localName;
     }
-    else if (typeof expression.nodeType === 'number')
-      nodes = [expression];
-    else if (Array.isArray(expression) ||
-      (typeof NodeList !== 'undefined' &&
-        expression instanceof NodeList) ||
-      (typeof HTMLCollection !== 'undefined' &&
-        expression instanceof HTMLCollection))
-      nodes = Array.from(expression);
-    else
-      throw new TypeError('applyTemplates(): cannot interpret ' +
-        'argument: ' + String(expression));
 
-    // every routed member must be a node — including the string
-    // path's wrapped results: a non-node-set expression result
-    // throws HERE with a clear message instead of deep inside
-    // matching (the same fail-loudly outcome, better spelled)
-    for (const n of nodes)
-      if (!n || typeof n.nodeType !== 'number')
-        throw new TypeError('applyTemplates(): not a node: ' +
-          String(n));
+    /**
+     * Does what it says on the tin.
+     *
+     * @param {string | XPathExpression} expression
+     *  The XPath expression in question
+     * @returns {XPathExpression}
+     */
+    #coerceXPath (expression) {
+        if (expression instanceof XPathExpression)
+            return expression;
 
-    const m = typeof mode === 'undefined' ? this.mode : mode;
-    const results = [];
-    for (const n of nodes) {
-      // uniform registry routing: every child node (any kind) is
-      // looked up like any other. nodes the registry can't net —
-      // non-elements, or elements with no template in the mode —
-      // hit the fallback: elements/documents recurse into their
-      // children (like the built-in rule would), non-elements
-      // produce nothing.
-      const t = this.registry.getMatchingTemplate(n, m);
-      if (t) {
-        // fresh Context per node: params merge incoming over current,
-        // mode inherited
-        const ctx = new Context(this.registry, n,
-          Object.assign({}, this.params, params), m);
-        const result = t.fn(ctx);
-        if (result === null || typeof result === 'undefined') continue;
-        // an array result is a list of specs: spread it, so an
-        // EMPTY array nets nothing (pushed whole it would read as
-        // one non-empty element downstream and defeat the drop
-        // semantics — e.g. the built-in * body over an element
-        // whose every child drops)
-        if (Array.isArray(result))
-          for (const r of result) results.push(r);
-        else results.push(result);
-      }
-      else if (n.nodeType === 1 || n.nodeType === 9) {
-        // fallback: recurse into children, per the built-in
-        // element rule's shape. the recursion results are spread
-        // so an empty recursion yields NOTHING here — an empty
-        // array pushed as a single element would read as a
-        // non-empty spec downstream and defeat the drop semantics.
-        // null-on-empty (the current contract) must not reach the
-        // spread at all, hence the guard
-        const ctx = new Context(this.registry, n,
-          Object.assign({}, this.params, params), m);
-        const kids = ctx.applyTemplates();
-        if (kids) results.push(...kids);
-      }
-      // non-elements with no template: dropped
+        const prefix = this.registry.effectiveDefaultPrefix(this.doc);
+        const string = prefix ?
+              rewriteExpression(expression, prefix) : expression;
+
+        return this.registry.compiledExpression(string, this.doc);
     }
-    // null — not [] — when nothing was netted: falsy, so the
-    // `applyTemplates(...) || fallback` idiom works
-    return results.length ? results : null;
-  }
 
-  // invoke a named template with the current node as context
-  callTemplate (name, params) {
-    const t = this.registry.named.get(name);
-    if (!t) return null;
+    /**
+     * Apply arbitrary XPath against the current node.
+     *
+     * @param {string | XPathExpression} expression
+     *  The XPath expression in question
+     * @returns { boolean | number | string | Node[] }
+     */
+    select (expression) {
+        /*
+          evaluate an arbitrary expression: returns a node array,
+          number, string, or boolean depending on the expression. the
+          expression is precompiled per (registry, document) through
+          the registry's XPathExpression cache — select() is typically
+          called in loops, and createExpression front-loads the
+          parse. when the registry and the context document share a
+          default-namespace state, the expression is first REWRITTEN:
+          unprefixed element name tests become `_:name`, resolved
+          against the document's default-namespace URI by the
+          registry's per-document resolver (see
+          Transform.effectiveDefaultPrefix). documents without a
+          default namespace pass through untouched, so unprefixed
+          names match namespace-less elements natively. this is the
+          same rewrite match patterns get at registration time,
+          funneled through the same decision source.
+        */
+        const expr = this.#coerceXPath(expression);
+        const r = expr.evaluate(this.node, XPathResult.ANY_TYPE, null);
 
-    // a named template gets its own Context: the incoming params
-    // merge over this Context's own (pass-through, as above)
-    const ctx = new Context(this.registry, this.node,
-      Object.assign({}, this.params, params));
-    return t.fn(ctx);
-  }
-
-  // clone the nodes netted by the expression for splicing into
-  // output: a fragment (multiple nodes) or a single node
-  copyOf (expression) {
-    const out = this.select(expression);
-    const nodes = Array.isArray(out) ? out : [out];
-    if (!nodes.length) return null;
-    if (nodes.length === 1) return nodes[0].cloneNode(true);
-    const frag = this.doc.createDocumentFragment();
-    for (const n of nodes) frag.appendChild(n.cloneNode(true));
-    return frag;
-  }
-
-  // map of the current node's attributes: { name: value }. handy for
-  // spreading existing attributes into a markup-mixup spec
-  getAttributes () {
-    const out = {};
-    if (!this.node.attributes) return out;
-    for (const a of this.node.attributes) out[a.name] = a.value;
-    return out;
-  }
-
-  // fetch and parse an external XML document by URI, the analogue of
-  // XSLT's document(). synchronous by design (the template pipeline
-  // is synchronous; fetch offers no sync mode, so XMLHttpRequest in
-  // async:false mode is the only browser mechanism). returns the
-  // parsed Document on success, or NULL on failure — unresolvable
-  // URL syntax, a transport failure (a non-200/non-0 status or a
-  // connection-level error), or a parse error (a parsererror root)
-  // — never throwing. fetch failures are CACHED like a success:
-  // one GET per URI per registry, failures included, so a
-  // transient failure poisons the URI for the Transform's lifetime
-  // (matching the success path's caching shape; a retry that can
-  // recover needs a fresh Transform). URL-syntax failures return
-  // null uncached (no request was made; the failure is
-  // deterministic). NOTE the interaction with polyvalent
-  // applyTemplates: after a failed fetch,
-  // ctx.applyTemplates(ctx.document(uri)) is applyTemplates(null) —
-  // the CURRENT node's children, silently. guard the call site:
-  // const doc = ctx.document(uri); if (doc) ctx.applyTemplates(doc).
-  document (uri) {
-    // resolve relative URIs against the current document. malformed
-    // URL SYNTAX throws from the URL constructor: same null
-    // contract, though nothing is cached — no request was made, so
-    // the one-GET-per-URI shape holds trivially, and the failure is
-    // deterministic anyway
-    let abs;
-    try {
-      abs = new URL(uri,
-        this.doc.baseURI || document.baseURI).href;
+        switch (r.resultType) {
+        case XPathResult.NUMBER_TYPE:  return r.numberValue;
+        case XPathResult.STRING_TYPE:  return r.stringValue;
+        case XPathResult.BOOLEAN_TYPE: return r.booleanValue;
+        default: {
+            const nodes = [];
+            let n;
+            while ((n = r.iterateNext())) nodes.push(n);
+            return nodes;
+        }
+        }
     }
-    catch (e) { return null; }
-    if (!this.registry.documents) this.registry.documents = new Map();
-    if (this.registry.documents.has(abs))
-      return this.registry.documents.get(abs);
 
-    const xhr = new XMLHttpRequest();
-    try {
-      xhr.open('GET', abs, false);
-      xhr.send(null);
+    /**
+     * Returns the truthiness of the given XPath expression when
+     * evaluated against the context node.
+     *
+     * @param {string | XPathExpression} expression
+     *  The XPath expression in question
+     * @returns {boolean}
+     */
+    test (expression) {
+        // XXX might this make sense to
+        const expr = this.#coerceXPath(expression);
+        const r = expr.evaluate(this.node, XPathResult.BOOLEAN_TYPE, null);
+
+        return r.booleanValue;
     }
-    catch (e) {
-      // a connection-level failure (offline, DNS, refused) throws
-      // from send() before any status exists: same null contract,
-      // same per-URI caching
-      return this.#cacheFailure(abs);
+
+    // find the best template for a node through the registry's
+    // node-match index, in the active mode
+    _bestTemplate (node) {
+        return this.registry.getMatchingTemplate(node, this.mode);
     }
-    if (xhr.status !== 200 && xhr.status !== 0)
-      return this.#cacheFailure(abs);
 
-    const parsed = new DOMParser().parseFromString(
-      xhr.responseText, 'application/xml');
-    // DOMParser reports parse errors as a document with a
-    // parsererror root, not an exception
-    if (parsed.getElementsByTagName('parsererror').length)
-      return this.#cacheFailure(abs);
+    applyTemplates (expression, params, mode) {
+        /*
+          apply templates to a node-set. the first argument is
+          polyvalent: omitted, null, undefined, or '' nets the current
+          node's children (unchanged); an XPath string is evaluated
+          through select() (rewritten per the evaluation document's
+          default namespace); a precompiled XPathExpression instance
+          is evaluated VERBATIM against the current node — a compiled
+          object cannot be rewritten, so the caller's own bindings are
+          the contract (this asymmetry with the string form is
+          deliberate: prefer the string when the default-namespace
+          rewrite is wanted, the instance when it is not); anything
+          with a numeric nodeType (a Node, Document, DocumentFragment,
+          attribute) routes as a singleton; an Array, NodeList, or
+          HTMLCollection routes as a node list; anything else throws a
+          TypeError. this gives the XSLT document($uri) idiom a
+          spelling — ctx.applyTemplates(ctx.document(uri)) — and lets
+          a template body route the nodes it already holds without
+          paying for an XPath round trip. the mode is inherited from
+          this Context unless overridden by the third argument.
+          returns an array of results — markup-mixup specs and/or DOM
+          nodes — or NULL when nothing was netted, so
+          `applyTemplates(...) || fallback` idioms work (null is
+          falsy; an empty array would not be). this matches `copyOf`
+          (null on empty) and `callTemplate` (null on missing). null
+          is itself absorbed by markup-mixup in every spec position (a
+          null entry is a no-op), and by transform()'s drop path, so
+          DOM assembly stays in `Transform.transform`.
+        */
 
-    this.registry.documents.set(abs, parsed);
-    return parsed;
-  }
+        //
+        let nodes = null;
+        if (typeof expression === 'undefined' ||
+            expression === null || expression === '')
+            nodes = Array.from(this.node.childNodes);
+        else if (typeof expression === 'string') {
+            const out = this.select(expression);
+            nodes = Array.isArray(out) ? out : [out];
+        }
+        else if (typeof XPathExpression !== 'undefined' &&
+                 expression instanceof XPathExpression) {
+            // verbatim: the caller compiled it, the caller resolves it
+            const r = expression.evaluate(
+                this.node, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+            nodes = [];
+            for (let i = 0; i < r.snapshotLength; i++)
+                nodes.push(r.snapshotItem(i));
+        }
+        else if (typeof expression.nodeType === 'number')
+            nodes = [expression];
+        else if (Array.isArray(expression) ||
+                 (typeof NodeList !== 'undefined' &&
+                  expression instanceof NodeList) ||
+                 (typeof HTMLCollection !== 'undefined' &&
+                  expression instanceof HTMLCollection))
+            nodes = Array.from(expression);
+        else
+            throw new TypeError('applyTemplates(): cannot interpret ' +
+                                'argument: ' + String(expression));
+        /*
+          every routed member must be a node — including the string
+          path's wrapped results: a non-node-set expression result
+          throws HERE with a clear message instead of deep inside
+          matching (the same fail-loudly outcome, better spelled)
+        */
+        for (const n of nodes)
+            if (!n || typeof n.nodeType !== 'number')
+                throw new TypeError('applyTemplates(): not a node: ' +
+                                    String(n));
 
-  // record a failed fetch: the null rides the same per-URI cache
-  // as a success, so the URI is fetched once per registry lifetime
-  #cacheFailure (abs) {
-    this.registry.documents.set(abs, null);
-    return null;
-  }
+        const m = typeof mode === 'undefined' ? this.mode : mode;
+        const results = [];
+        for (const n of nodes) {
+            /*
+              uniform registry routing: every child node (any kind) is
+              looked up like any other. nodes the registry can't net —
+              non-elements, or elements with no template in the mode —
+              hit the fallback: elements/documents recurse into their
+              children (like the built-in rule would), non-elements
+              produce nothing.
+            */
+            const t = this.registry.getMatchingTemplate(n, m);
+            // this is the same on both branches
+            const p = Object.assign({}, this.params, params);
+            if (t) {
+                /*
+                  fresh Context per node: params merge incoming over
+                  current, mode inherited
+                */
+                const ctx = new Context(this.registry, n, p, m);
+                const result = t.fn(ctx);
+                if (result === null || typeof result === 'undefined') continue;
+                /*
+                  an array result is a list of specs: spread it, so an
+                  EMPTY array nets nothing (pushed whole it would read as
+                  one non-empty element downstream and defeat the drop
+                  semantics — e.g. the built-in * body over an element
+                  whose every child drops)
+                */
+                if (Array.isArray(result))
+                    for (const r of result) results.push(r);
+                else results.push(result);
+            }
+            else if (n.nodeType in [1, 9, 11]) {
+                /*
+                  fallback: recurse into children, per the built-in
+                  element rule's shape. the recursion results are
+                  spread so an empty recursion yields NOTHING here —
+                  an empty array pushed as a single element would read
+                  as a non-empty spec downstream and defeat the drop
+                  semantics.  null-on-empty (the current contract)
+                  must not reach the spread at all, hence the guard
+                */
+                const ctx = new Context(this.registry, n, p, m);
+                const kids = ctx.applyTemplates();
+                // window.console.log(m, kids);
+                if (kids) results.push(...kids);
+            }
+            // non-elements with no template: dropped
+        }
+
+        // null — not [] — when nothing was netted: falsy, so the
+        // `applyTemplates(...) || fallback` idiom works
+        return results.length ? results : null;
+    }
+
+    // invoke a named template with the current node as context
+    callTemplate (name, params) {
+        const t = this.registry.named.get(name);
+        if (!t) return null;
+
+        // a named template gets its own Context: the incoming params
+        // merge over this Context's own (pass-through, as above)
+        const ctx = new Context(this.registry, this.node,
+                                Object.assign({}, this.params, params));
+        return t.fn(ctx);
+    }
+
+    /**
+     * Clone the node(s) returned by the given expression and return
+     * either a single `Node` or a `DocumentFragment` or `null`.
+     *
+     * @param {string} expression
+     * @returns { Node | DocumentFragment | null }
+     */
+    copyOf (expression) {
+        const out = this.select(expression);
+        const nodes = Array.isArray(out) ? out : [out];
+        if (!nodes.length) return null;
+        if (nodes.length === 1) return nodes[0].cloneNode(true);
+        const frag = this.doc.createDocumentFragment();
+        for (const n of nodes) frag.appendChild(n.cloneNode(true));
+        return frag;
+    }
+
+    /**
+     * Return an object representing the current node's attributes, in
+     * the form `{ qname: value }`. Returns `null` if the node is not
+     * an element.
+     *
+     * @returns { Object }
+     */
+    getAttributes () {
+        const out = {};
+        if (!this.node.attributes) return null;
+        for (const a of this.node.attributes) out[a.name] = a.value;
+        return out;
+    }
+
+    /**
+     * Fetch (synchronously) a `Document` by the given URI.
+     *
+     * @param {string} uri
+     * @returns { Document | null }
+     */
+    document (uri) {
+        /*
+          fetch and parse an external XML (or HTML) document by URI,
+          the analogue of XSLT's document(). synchronous by design
+          (the template pipeline is synchronous; fetch offers no sync
+          mode, so XMLHttpRequest in async:false mode is the only
+          browser mechanism). returns the parsed Document on success,
+          or NULL on failure — unresolvable URL syntax, a transport
+          failure (a non-200/non-0 status or a connection-level
+          error), or a parse error (a parsererror root) — never
+          throwing. fetch failures are CACHED like a success: one GET
+          per URI per registry, failures included, so a transient
+          failure poisons the URI for the Transform's lifetime
+          (matching the success path's caching shape; a retry that can
+          recover needs a fresh Transform). URL-syntax failures return
+          null uncached (no request was made; the failure is
+          deterministic). NOTE the interaction with polyvalent
+          applyTemplates: after a failed fetch,
+          ctx.applyTemplates(ctx.document(uri)) is
+          applyTemplates(null) — the CURRENT node's children,
+          silently. guard the call site: const doc =
+          ctx.document(uri); if (doc) ctx.applyTemplates(doc).
+        */
+
+        /*
+          resolve relative URIs against the current document.
+          malformed URL SYNTAX throws from the URL constructor: same
+          null contract, though nothing is cached — no request was
+          made, so the one-GET-per-URI shape holds trivially, and the
+          failure is deterministic anyway
+        */
+        let abs;
+        try {
+            abs = new URL(uri, this.doc.baseURI || document.baseURI).href;
+        }
+        catch (e) { return null; }
+        if (!this.registry.documents) this.registry.documents = new Map();
+        if (this.registry.documents.has(abs))
+            return this.registry.documents.get(abs);
+
+        const xhr = new XMLHttpRequest();
+        try {
+            xhr.open('GET', abs, false);
+            xhr.send(null);
+
+        }
+        catch (e) {
+            // a connection-level failure (offline, DNS, refused) throws
+            // from send() before any status exists: same null contract,
+            // same per-URI caching
+            return this.#cacheFailure(abs);
+        }
+        if (xhr.status !== 200 && xhr.status !== 0)
+            return this.#cacheFailure(abs);
+
+        let parsed = xhr.responseXML || (new DOMParser()).parseFromString(
+            xhr.responseText, xhr.getResponseHeader('Content-Type'));
+        // DOMParser reports parse errors as a document with a
+        // parsererror root, not an exception
+        if (parsed.getElementsByTagName('parsererror').length)
+            return this.#cacheFailure(abs);
+
+        // window.console.log(parsed.querySelectorAll('*').length);
+
+        parsed = parsed.cloneNode(true);
+
+        this.registry.documents.set(abs, parsed);
+        return parsed;
+    }
+
+    // record a failed fetch: the null rides the same per-URI cache
+    // as a success, so the URI is fetched once per registry lifetime
+    #cacheFailure (abs) {
+        this.registry.documents.set(abs, null);
+        return null;
+    }
 }

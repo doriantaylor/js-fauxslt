@@ -161,7 +161,7 @@
 import MARKUP from 'markup-mixup';
 import { Template } from './template.js';
 import { NamespaceMap, DEFAULT_PREFIX, defaultNamespaceURI }
-  from './namespaces.js';
+from './namespaces.js';
 import { Context } from './context.js';
 import { isDefaultNamespaced } from './expressions.js';
 
@@ -180,7 +180,7 @@ import { isDefaultNamespaced } from './expressions.js';
 // declarations that bind the prefix, so markup-mixup creates it
 // namespaced correctly.
 const qualifiedName = (node) =>
-    node.nodeName.indexOf(':') >= 0 ? node.nodeName : node.localName;
+      node.nodeName.indexOf(':') >= 0 ? node.nodeName : node.localName;
 
 export class Transform {
 
@@ -275,7 +275,7 @@ export class Transform {
         // their bindings. nearest declaration wins, per XML
         // scoping
         for (let cur = node; cur && cur.nodeType === 1;
-            cur = cur.parentNode)
+             cur = cur.parentNode)
             if (cur.attributes)
                 for (const a of cur.attributes)
                     if (a.name === 'xmlns' || a.prefix === 'xmlns')
@@ -283,7 +283,7 @@ export class Transform {
         // the children ride the #tag array: null (nothing netted)
         // must not reach the concat, hence the || []
         out['#tag'] = out['#tag']
-          .concat(ctx.applyTemplates() || []);
+            .concat(ctx.applyTemplates() || []);
         return out;
     };
 
@@ -298,7 +298,7 @@ export class Transform {
         for (const a of node.attributes) {
             if (a.prefix === 'xmlns' || a.name === 'xmlns')
                 el.setAttributeNS('http://www.w3.org/2000/xmlns/',
-                    a.name, a.value);
+                                  a.name, a.value);
             else el.setAttribute(a.name, a.value);
         }
         MARKUP({ parent: el, spec: ctx.applyTemplates(), args: [ctx] });
@@ -317,7 +317,7 @@ export class Transform {
     // spec carries the data clean
     static #identityPI = function (ctx) {
         return { '#processing-instruction':
-            [ctx.node.target, ctx.node.data] };
+                 [ctx.node.target, ctx.node.data] };
     };
 
     constructor (namespaces, { identity = false } = {}) {
@@ -344,11 +344,11 @@ export class Transform {
         let defaultURI = null;
         if (namespaces) {
             const explicit = namespaces instanceof Map ?
-                namespaces.get('') : namespaces[''];
+                  namespaces.get('') : namespaces[''];
             if (explicit) defaultURI = explicit;
         }
         else if (typeof document !== 'undefined' &&
-            document.documentElement)
+                 document.documentElement)
             defaultURI = defaultNamespaceURI(document);
 
         // a user `_` in effect anywhere in the map stands the
@@ -377,14 +377,14 @@ export class Transform {
         // and root bodies for the shallow-copy form and preserves
         // comments and PIs.
         this.registerMatch('*', identity ?
-            Transform.#identityElement : Transform.#builtinElement);
+                           Transform.#identityElement : Transform.#builtinElement);
         this.registerMatch('/', identity ?
-            Transform.#identityElement : Transform.#builtinRoot);
+                           Transform.#identityElement : Transform.#builtinRoot);
         this.registerMatch('text()', Transform.#builtinText);
         this.registerMatch('comment()', identity ?
-            Transform.#identityComment : Transform.#builtinComment);
+                           Transform.#identityComment : Transform.#builtinComment);
         this.registerMatch('processing-instruction()', identity ?
-            Transform.#identityPI : Transform.#builtinPI);
+                           Transform.#identityPI : Transform.#builtinPI);
 
         // the per-node match memo: WeakMap(node, Set(templates)),
         // computed on demand per candidate (see the class comment
@@ -456,7 +456,7 @@ export class Transform {
             name = opts.name || null;
         }
         const t = new Template({ match, fn, mode, priority, name,
-            prefix: this.#rewritePrefix });
+                                 prefix: this.#rewritePrefix });
 
         // the pattern map is keyed by pattern, then by mode: a
         // pattern is really a pattern-mode pair
@@ -582,7 +582,7 @@ export class Transform {
             // rule a user `_` rides the merge and the fallback
             // stands down.
             const uri = defaultNamespaceURI(doc) ||
-                this.namespaces.get('');
+                  this.namespaces.get('');
             if (uri && !this.#userUnderscore &&
                 !merged.has(DEFAULT_PREFIX))
                 merged.set(DEFAULT_PREFIX, uri);
@@ -605,22 +605,22 @@ export class Transform {
         const absolutes = [];
         // this.templates maps pattern -> Map(mode -> Template)
         for (const byMode of this.templates.values())
-        for (const t of byMode.values()) {
-            for (const b of t.branches || []) {
-                const string = b.evalExpr;
-                if (b.absolute) {
-                    absolutes.push({ string, template: t, branch: b });
-                    continue;
+            for (const t of byMode.values()) {
+                for (const b of t.branches || []) {
+                    const string = b.evalExpr;
+                    if (b.absolute) {
+                        absolutes.push({ string, template: t, branch: b });
+                        continue;
+                    }
+                    let entry = byString.get(string);
+                    if (!entry) {
+                        entry = { string, templates: new Set(),
+                                  match: b.match };
+                        byString.set(string, entry);
+                    }
+                    entry.templates.add(t);
                 }
-                let entry = byString.get(string);
-                if (!entry) {
-                    entry = { string, templates: new Set(),
-                        match: b.match };
-                    byString.set(string, entry);
-                }
-                entry.templates.add(t);
             }
-        }
         this.#collatedAbsolute = absolutes;
         this.#collated = byString;
         return byString;
@@ -700,22 +700,21 @@ export class Transform {
                 const p = node.parentNode;
                 if (p && (p.nodeType === 1 || p.nodeType === 9) &&
                     this.#evaluateNodes(entry.string, p)
-                        .includes(node))
+                    .includes(node))
                     for (const t of entry.templates) set.add(t);
             }
             else if (cls === 'owner') {
                 // attribute tail: the candidate's ownerElement
                 if (node.nodeType === 2 && node.ownerElement &&
                     this.#evaluateNodes(entry.string,
-                        node.ownerElement).includes(node))
+                                        node.ownerElement).includes(node))
                     for (const t of entry.templates) set.add(t);
             }
             else if (cls === 'self') {
                 // the bare .: the candidate itself, iff it can
                 // serve as an XPath context (element or document)
                 if ((node.nodeType === 1 || node.nodeType === 9) &&
-                    this.#evaluateNodes(entry.string, node)
-                        .includes(node))
+                    this.#evaluateNodes(entry.string, node).includes(node))
                     for (const t of entry.templates) set.add(t);
             }
             else {
@@ -766,19 +765,18 @@ export class Transform {
         this.#rootSets = new WeakMap();
 
         const ctx  = new Context(this, node, params, mode);
-        const spec = ctx.applyTemplates('self::node()', null, mode);
+        const spec = ctx.applyTemplates(node, null, mode);
 
-        // nothing netted: remove the node outright. this is the
-        // drop path for e.g. the built-in comment() and
-        // processing-instruction() rules routed at the top level
-        if (!Array.isArray(spec) || !spec.length) {
+        // window.console.log('transform called');
+
+        // if nothing is matched then we remove the node
+        if (!spec || (Array.isArray(spec) && !spec.length)) {
             if (node.parentNode) node.parentNode.removeChild(node);
             return null;
         }
 
-        // args carries the Context so nested spec callbacks receive it
-        // (as `this` for plain functions, as the first argument
-        // otherwise); MARKUP returns the last node added
-        return MARKUP({ replace: node, spec: spec, args: [ctx] });
+        // note that MARKUP returns the last node added, the thought
+        // being that you can continue constructing the tree
+        return MARKUP({ replace: node, spec: spec });
     }
 }

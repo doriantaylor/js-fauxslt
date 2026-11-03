@@ -56,7 +56,8 @@ test('accepts: arithmetic in predicate',
 test('accepts: attribute step in path', ok('@foo/@bar'));
 test('accepts: bare attribute step', ok('@*'));
 test('accepts: string equality predicate',
-  ok("para[@class = 'draft']"));
+     ok("para[@class = 'draft']"));
+test('accepts: arbitrary path axes in predicates', ok('text()[ancestor::pre]'));
 
 // --- outside the subset: syntax errors ------------------------------
 test('rejects: empty', bad(''));

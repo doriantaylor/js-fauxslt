@@ -51,6 +51,18 @@ test('accepts: id with steps', ok("id('intro')/para"));
 test('accepts: predicate with function call',
   ok("item[position() = 2]"));
 test('accepts: nested predicates', ok('div[@id][1]'));
+// NB: "//" precedes "/" in the predicate-expression path rules
+// for the same possessive-choice reason as the pattern side;
+// these pin deep separators inside predicates
+test('accepts: deep separator in predicate path', ok('body[.//main]'));
+test('accepts: deep separator mid-path in predicate', ok('body[x//main]'));
+test('accepts: chained deep separators in predicate',
+  ok('body[a//b//c]'));
+test('accepts: negated deep predicate path', ok('body[not(.//main)]'));
+test('accepts: deep path with predicated step in predicate',
+  ok('body[.//main[@id="x"]]'));
+test('accepts: the hidden-main fallback union',
+  ok('main[not(@hidden)]|body[not(.//main[not(@hidden)])]'));
 test('accepts: arithmetic in predicate',
   ok('item[position() + 1 = 2]'));
 test('accepts: attribute step in path', ok('@foo/@bar'));
@@ -102,6 +114,14 @@ test('predicated axes round-trip through serialization', () => {
   assert.equal(
     compilePattern('p[namespace::x]').evalExpr,
     'p[namespace::x]');
+  // deep predicate steps round-trip: the deep marker reserializes
+  // as // (serSteps), including after a self step
+  assert.equal(
+    compilePattern('body[.//main]', { prefix: '_' }).evalExpr,
+    '_:body[.//_:main]');
+  assert.equal(
+    compilePattern('body[x//main]', { prefix: '_' }).evalExpr,
+    '_:body[_:x//_:main]');
 });
 
 // --- outside the subset: syntax errors ------------------------------

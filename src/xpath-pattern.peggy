@@ -215,9 +215,12 @@ UnionExpr
 
 // FilterExpr-first ordering is load-bearing: a bare name must not
 // parse as a FilterExpr prefix and leave a trailing '(' behind.
+// NB: as on the pattern side, "//" must be tried before "/":
+// PEG choice is possessive, so with "/" first a//b would strand
+// the second slash
 PathExpr
   = f:FilterExpr
-    rest:(_ sep:("/" / "//") _ r:RelativeLocationPath {
+    rest:(_ sep:("//" / "/") _ r:RelativeLocationPath {
       return [sep, r.steps]; })* {
       if (!rest.length) return f;
       const steps = [];
@@ -281,8 +284,9 @@ AbsoluteLocationPath
     }
 
 RelativeLocationPath
+  // NB: "//" before "/": possessive choice would strand the slash
   = first:Step
-    rest:(_ sep:("/" / "//") _ s:Step { return [sep, s]; })* {
+    rest:(_ sep:("//" / "/") _ s:Step { return [sep, s]; })* {
       const steps = [first];
       for (const pair of rest) {
         const step = pair[1];
